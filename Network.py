@@ -6,22 +6,25 @@ import torch.nn.functional as F
 
 class Net(nn.Module):
 
-    def __init__(self, args):
+    def __init__(self, jparams):
         super(Net, self).__init__()
 
-        self.batchSize = args.batchSize
-        self.eta = args.eta
-        self.output = args.layersList[-1]
-        self.ConvNET = args.ConvNET
+        self.batchSize = jparams['batchSize']
+        self.eta = jparams['eta']
+        self.output = jparams['fcLayers'][-1]
+        self.convNet = jparams['convNet']
+        self.fcLayers = jparams['fcLayers']
+        self.rho = jparams['rho']
 
-        if self.ConvNET:
+        # TODO redefine the convolutional layer with new hyper-parameters
+        if self.convNet:
             self.Conv = nn.ModuleList(None)
-            conv_number = int(len(args.convLayers) / 5)
+            conv_number = int(len(jparams['convLayers']) / 5)
             self.conv_number = conv_number
             for i in range(conv_number):
-                self.Conv.append(nn.Conv2d(in_channels=args.convLayers[i*5], out_channels=args.convLayers[i*5+1],
-                                           kernel_size=args.convLayer[i*5+2], stride=args.convLayer[i*5+3],
-                                           padding=args.convLayer[i*5+4]))
+                self.Conv.append(nn.Conv2d(in_channels=jparams['convLayers'][i*5], out_channels=jparams['convLayers'][i*5+1],
+                                           kernel_size=jparams['convLayer'][i*5+2], stride=jparams['convLayer'][i*5+3],
+                                           padding=jparams['convLayer'][i*5+4]))
             self.pool = nn.MaxPool2d(kernel_size=2)
 
             #
@@ -47,12 +50,12 @@ class Net(nn.Module):
         # fully connected layer, output 10 classes
         self.W = nn.ModuleList(None)
         with torch.no_grad():
-            for i in range(len(args.layersList) - 1):
-                self.W.extend([nn.Linear(args.layersList[i], args.layersList[i + 1], bias=True)])
+            for i in range(len(jparams['fcLayers']) - 1):
+                self.W.extend([nn.Linear(jparams['fcLayers'][i], jparams['fcLayers'][i + 1], bias=True)])
 
         # put model on GPU is available and asked
-        if args.device >= 0 and torch.cuda.is_available():
-            device = torch.device("cuda:" + str(args.device))
+        if jparams['device'] >= 0 and torch.cuda.is_available():
+            device = torch.device("cuda:" + str(jparams['device']))
             self.cuda = True
         else:
             device = torch.device("cpu")
@@ -71,16 +74,13 @@ class Net(nn.Module):
         elif type == 'sigmoid':
             return torch.sigmoid(x)
         elif type == 'hardsigm':
-            #return torch.maximum(torch.zeros(x.shape), torch.minimum(torch.ones(x.shape), (x+1)/2.))
-            return F.hardsigmoid(x)
-        elif type == 'clamp':
             return torch.clamp(x, 0, 1)
         elif type == 'tanh':
             return 0.5+0.5*torch.tanh(x)
 
-    def forward(self, args, x):
+    def forward(self, x):
         # TODO we can remove the args in the input variables
-        if self.ConvNET:
+        if self.convNet:
             for i in range(self.conv_number):
                 x = self.conv_number[i](x)
                 x = F.relu(x),
@@ -89,18 +89,21 @@ class Net(nn.Module):
             # flatten the output of conv2 to (batch_size, 32 * 7 * 7)
             x = x.view(x.size(0), -1)
 
-        for i in range(len(args.layersList)-1):
-            x = self.rho(self.W[i](x), args.rho[i])
+        for i in range(len(self.fcLayers)-1):
+            x = self.rho(self.W[i](x), self.rho[i])
 
         return x
-    # for i in range(len(args.layersList)-1):
+    # for i in range(len(args.fcLayers)-1):
     #         x = self.rho(self.W[i](x), args.rho[i])
 
         return output
 
-    ''' The following function concerning the RP, which assumes that the batchSize = 1'''
-
     def defi_target_01(self, output, N, penalty_gate='NON'):
+
+        '''Define the target also for the refactory period mechanism'''
+        ''' The following function concerning the RP, which assumes that the batchSize = 1'''
+
+        # define the target by the
 
         # create unsupervised target
         unsupervised_targets = torch.zeros(output.size())
@@ -135,6 +138,7 @@ class Net(nn.Module):
 
         return unsupervised_targets, N_maxindex
 
+    # TODO to remove this function and write the new one of semi-supervised learning
     def alter_N_target_sm(self, output, target, supervised_response, N):
         '''
         limited only at output=10, sm
@@ -196,23 +200,59 @@ class Net(nn.Module):
         return Y
 
     '''Add the weight normalization function'''
-    def Weight_normal(self, args):
+    def Weight_normal(self):
         with torch.no_grad():
-            for i in range(len(args.layersList) - 1):
-                # #H = torch.mean(self.W[i].weight.data, 1) / args.layersList[i]
+            for i in range(len(self.fcLayers) - 1):
+                # #H = torch.mean(self.W[i].weight.data, 1) / args.fcLayers[i]
                 # H = torch.mean(self.W[i].weight.data, 1) / 10
                 # #H = torch.mean(self.W[i].weight.data, 1)
-                # H = H.expand(args.layersList[i], args.layersList[i+1])
+                # H = H.expand(args.fcLayers[i], args.fcLayers[i+1])
                 # self.W[i].weight.data = self.W[i].weight.data - H.t()
-                for j in range(args.layersList[i + 1]):
+                for j in range(self.fcLayers[i + 1]):
                     self.W[i].weight[:, j].data = self.W[i].weight[:, j].data / torch.norm(self.W[i].weight[:, j].data)
-                # self.W[i].weight.data = self.W[i].weight.data - (torch.mean(self.W[i].weight.data,1)/args.layersList[i+1]).expand(args.layersList[i+1], args.layersList[i]).t()
+                # self.W[i].weight.data = self.W[i].weight.data - (torch.mean(self.W[i].weight.data,1)/args.fcLayers[i+1]).expand(args.fcLayers[i+1], args.fcLayers[i]).t()
                 # print('the layer is', i)
                 # print('the weight after normalization is', self.W[i].weight.data)
                 # print('the average is', torch.mean(self.W[i].weight.data,1))
 
 
+class Classlayer(nn.Module):
+    # one layer perceptron does not need to be trained by EP
+    def __init__(self, jparams):
+        super(Classlayer, self).__init__()
+        # output_neuron=args.n_class
+        self.output = jparams['n_class']
+        self.input = jparams['fcLayers'][0]
+        self.activation = jparams['class_activation']
+        # define the classification layer
+        self.class_layer = nn.Linear(self.input, self.output, bias=True)
 
+        if jparams['device'] >= 0 and torch.cuda.is_available():
+            device = torch.device("cuda:" + str(jparams['device']))
+            self.cuda = True
+        else:
+            device = torch.device("cpu")
+            self.cuda = False
 
+        self.device = device
+        self = self.to(device)
+
+    def rho(self, x, type):
+        if type == 'relu':
+            return F.relu(x)
+        elif type == 'softmax':
+            return F.softmax(x, dim=1)
+        elif type == 'x':
+            return x
+        elif type == 'sigmoid':
+            return torch.sigmoid(x)
+        elif type == 'hardsigm':
+            return torch.clamp(x, 0, 1)
+        elif type == 'tanh':
+            return 0.5+0.5*torch.tanh(x)
+
+    def forward(self, x):
+        x = self.rho(self.class_layer(x), self.activation)
+        return x
 
 

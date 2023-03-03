@@ -134,6 +134,32 @@ class YinYangDataset(Dataset):
         return len(self.__cs)
 
 
+class splitClass(Dataset):
+    def __init__(self, x, y, split_ratio, seed, transform=None, target_transform=None):
+
+        class_set_data, rest_data, \
+        class_set_targets, rest_targets = train_test_split(x, y, train_size=split_ratio, random_state=seed, stratify=y)
+
+        del(rest_data, rest_targets)
+
+        self.data = class_set_data
+        self.transform = transform
+        self.targets = class_set_targets
+        self.target_transform = target_transform
+
+    def __getitem__(self, item):
+        img, label = self.data[item].numpy(), self.targets[item].numpy()
+        img = Image.fromarray(img)
+        if self.transform is not None:
+            img = self.transform(img)
+        if self.target_transform is not None:
+            label = self.target_transform(label)
+        return img, label
+
+    def __len__(self):
+        return len(self.targets)
+
+
 def UnlabelDataset(train_set, root, unlabeledPercent, Seed):
     seedfile = str(unlabeledPercent*100) + '%' + 'unsupervised_indice' + 'Seed' + str(Seed) + '.txt'
     filePath = os.path.join(root, seedfile)

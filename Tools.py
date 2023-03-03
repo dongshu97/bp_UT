@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from Network import*
 
 
-def classify(net, args, class_loader):
+def classify(net, jparams, class_loader):
 
     net.eval()
 
@@ -30,7 +30,7 @@ def classify(net, args, class_loader):
             # targets = targets.to(net.device)
 
         # forward propagation
-        output = net(args, data.to(torch.float32))
+        output = net(data.to(torch.float32))
         # make a copy in the device (it works even initially in cpu)
         # n_output = torch.clone(output).detach().cpu()
 
@@ -48,9 +48,9 @@ def classify(net, args, class_loader):
 
     ##################### classifier one2one ########################
 
-    class_moyenne = torch.zeros((args.n_class, args.layersList[-1]), device=net.device)
+    class_moyenne = torch.zeros((jparams['n_class'], jparams['fcLayers'][-1]), device=net.device)
 
-    for i in range(args.n_class):
+    for i in range(jparams['n_class']):
         indice = (class_vector == i).nonzero(as_tuple=True)[0]
         result_single = result_output[indice, :]
         class_moyenne[i, :] = torch.mean(result_single, axis=0)
@@ -64,7 +64,7 @@ def classify(net, args, class_loader):
 
     return response
 
-
+# TODO what for???
 def cluster(class_vector, result_output, n_class, device):
 
     responses = [[] for k in range(len(result_output))]
@@ -93,15 +93,16 @@ def cluster(class_vector, result_output, n_class, device):
     return responses, total_unclassifited
 
 
-def classify_layers(net, args, class_loader):
+def classify_layers(net, jparams, class_loader):
+    '''To the give the class for each hidden layer'''
 
     net.eval()
 
-    if args.ConvNET:
-        layers_number = int(len(args.convLayers)/5) + len(args.layersList) - 1
-        conv_number = int(len(args.convLayers)/5)
+    if jparams['convNet']:
+        layers_number = int(len(jparams['convLayers'])/5) + len(jparams['fcLayers']) - 1
+        conv_number = int(len(jparams['convLayers'])/5)
     else:
-        layers_number = len(args.layersList) - 1
+        layers_number = len(jparams['fcLayers']) - 1
         conv_number = 0
 
     result_outputs = [[] for k in range(layers_number)]
@@ -122,7 +123,7 @@ def classify_layers(net, args, class_loader):
         x = data
 
         # redo the forward propagation
-        if net.ConvNET:
+        if net.convNet:
             for i in range(conv_number):
                 x = net.conv_number[i](x)
                 x = F.relu(x),
@@ -136,8 +137,8 @@ def classify_layers(net, args, class_loader):
                 else:
                     result_outputs[i][0] = torch.cat((result_outputs[i][0], output.detach()), 0)
 
-        for i in range(len(args.layersList)-1):
-            x = net.rho(net.W[i](x), args.rho[i])
+        for i in range(len(jparams['fcLayers'])-1):
+            x = net.rho(net.W[i](x), jparams['rho'][i])
             output = x.clone()
 
             if batch_idx == 0:
@@ -146,22 +147,22 @@ def classify_layers(net, args, class_loader):
                 result_outputs[i + conv_number][0] = torch.cat((result_outputs[i + conv_number][0], output.detach()), 0)
 
     ##################### classifier one2one ########################
-    all_responses, total_unclassified = cluster(class_vector, result_outputs, args.n_class, net.device)
+    all_responses, total_unclassified = cluster(class_vector, result_outputs, jparams['n_class'], net.device)
 
     return all_responses, total_unclassified
 
 
-def train_Xth(net, args, train_loader, epoch, supervised_response=None):
+def train_Xth(net, jparams, train_loader, epoch, supervised_response=None):
 
     net.train()
     net.epoch = epoch + 1
 
     # construct the loss function
-    if args.loss == 'MSE':
+    if jparams['lossFunction'] == 'MSE':
         criterion = torch.nn.MSELoss()
-    elif args.loss == 'Cross-entropy':
+    elif jparams['lossFunction'] == 'Cross-entropy':
         criterion = torch.nn.CrossEntropyLoss()
-    Xth = torch.zeros(args.layersList[-1], device=net.device)
+    Xth = torch.zeros(jparams['fcLayers'][-1], device=net.device)
     # construct the layer-wise parameters
     layer_names = []
     for idx, (name, param) in enumerate(net.named_parameters()):
@@ -179,7 +180,7 @@ def train_Xth(net, args, train_loader, epoch, supervised_response=None):
         # update learning rate
         if idx % 2 == 0:
             lr_indx = int(idx / 2)
-            lr = args.lr[lr_indx]
+            lr = jparams['lr'][lr_indx]
 
         # display info
         # print(f'{idx}: lr = {lr:.6f}, {name}')
@@ -189,11 +190,14 @@ def train_Xth(net, args, train_loader, epoch, supervised_response=None):
                         'lr': lr}]
 
     # construct the optimizer
-    optimizer = torch.optim.SGD(parameters)
+    if jparams['Optimizer'] == 'SGD':
+        optimizer = torch.optim.SGD(parameters)
+    elif jparams['Optimizer'] == 'Adam':
+        optimizer = torch.optim.Adam(parameters)
 
     # Stochastic mode
-    if args.batchSize == 1:
-        Y_p = torch.zeros(args.layersList[-1], device=net.device)
+    if jparams['batchSize'] == 1:
+        Y_p = torch.zeros(jparams['fcLayers'][-1], device=net.device)
 
     for batch_idx, (data, target) in enumerate(train_loader):
         if net.cuda:
@@ -209,23 +213,23 @@ def train_Xth(net, args, train_loader, epoch, supervised_response=None):
         #     net.Weight_normal(args)
 
         # forward propagation
-        output = net(args, data.to(torch.float32))
+        output = net(data.to(torch.float32))
 
         # create the unsupervised target on GPU
         # unsupervised_targets, N_maxindex = net.defi_N_target(output - Xth, args.nudge_N)
         # if args.unlabeledPercent != 0 and args.unlabeledPercent != 1:
-        #     assert args.batchSize == 1 and args.layersList[-1] == 10, 'This targets function has not been written yet'
+        #     assert args.batchSize == 1 and args.fcLayers[-1] == 10, 'This targets function has not been written yet'
         #     unsupervised_targets, supervised_response = net.alter_N_target_sm(output-Xth, target, supervised_response, args.nudge_N)
         # else:
         unsupervised_targets = torch.zeros(output.size(), device=net.device)
-        unsupervised_targets.scatter_(1, torch.topk(output.detach() - Xth, args.nudge_N).indices, torch.ones(output.size(), device=net.device))
+        unsupervised_targets.scatter_(1, torch.topk(output.detach() - Xth, jparams['nudge_N']).indices, torch.ones(output.size(), device=net.device))
 
-        target_activity = args.nudge_N/args.layersList[-1]
-        if args.batchSize == 1:
-            Y_p = (1 - args.eta) * Y_p + args.eta * unsupervised_targets[0]
-            Xth += args.gamma * (Y_p - target_activity)
+        target_activity = jparams['nudge_N']/jparams['fcLayers'][-1]
+        if jparams['batchSize'] == 1:
+            Y_p = (1 - jparams['eta']) * Y_p + jparams['eta'] * unsupervised_targets[0]
+            Xth += jparams['gamma'] * (Y_p - target_activity)
         else:
-            Xth += args.gamma * (torch.mean(unsupervised_targets, axis=0) - target_activity)
+            Xth += jparams['gamma'] * (torch.mean(unsupervised_targets, axis=0) - target_activity)
 
         # calculate the loss on the gpu
         loss = criterion(output, unsupervised_targets.to(torch.float32))
@@ -241,7 +245,7 @@ def train_Xth(net, args, train_loader, epoch, supervised_response=None):
     return Xth
 
 
-def train_bp(net, args, train_loader, epoch):
+def train_bp(net, jparams, train_loader, epoch):
 
     net.train()
     net.epoch = epoch+1
@@ -266,7 +270,7 @@ def train_bp(net, args, train_loader, epoch):
         # update learning rate
         if idx % 2 == 0:
             lr_indx = int(idx/2)
-            lr = args.lr[lr_indx]
+            lr = jparams['lr'][lr_indx]
 
         # display info
         #print(f'{idx}: lr = {lr:.6f}, {name}')
@@ -277,7 +281,10 @@ def train_bp(net, args, train_loader, epoch):
 
     # construct the optimizer
     # TODO changer optimizer to ADAM
-    optimizer = torch.optim.SGD(parameters, momentum=0.5)
+    if jparams['Optimizer'] == 'SGD':
+        optimizer = torch.optim.SGD(parameters, momentum=0.5)
+    elif jparams['Optimizer'] == 'Adam':
+        optimizer = torch.optim.Adam(parameters, momentum=0.5)
     #optimizer = torch.optim.Adam(net.parameters(), lr=lr)
 
     # construct the scheduler
@@ -304,7 +311,7 @@ def train_bp(net, args, train_loader, epoch):
         #     net.Weight_normal(args)
 
         # forward propagation
-        output = net(args, data.to(torch.float32))
+        output = net(data.to(torch.float32))
 
         loss = criterion(output, targets.to(torch.float32))
 
@@ -331,7 +338,7 @@ def train_bp(net, args, train_loader, epoch):
     return train_error
 
 
-def test_Xth(net, args, test_loader, response, spike_record=0):
+def test_Xth(net, jparams, test_loader, response, spike_record=0):
     '''
         Function to test the network
         '''
@@ -345,9 +352,9 @@ def test_Xth(net, args, test_loader, response, spike_record=0):
 
     # records of the spikes
     if spike_record:
-        spike = torch.zeros(args.n_class, args.layersList[-1], device=net.device)
-        predic_spike_max = torch.zeros(args.n_class, args.n_class, device=net.device)
-        predic_spike_av = torch.zeros(args.n_class, args.n_class, device=net.device)
+        spike = torch.zeros(jparams['n_class'], jparams['fcLayers'][-1], device=net.device)
+        predic_spike_max = torch.zeros(jparams['n_class'], jparams['n_class'], device=net.device)
+        predic_spike_av = torch.zeros(jparams['n_class'], jparams['n_class'], device=net.device)
 
     for batch_idx, (data, targets) in enumerate(test_loader):
 
@@ -355,16 +362,16 @@ def test_Xth(net, args, test_loader, response, spike_record=0):
             data = data.to(net.device)
             targets = targets.to(net.device)
 
-        output = net(args, data.to(torch.float32))
+        output = net(data.to(torch.float32))
 
         # calculate the total testing times and record the testing labels
         total_test += targets.size()[0]
 
         # TODO make a version compatible with batch
         '''average value'''
-        classvalue = torch.zeros(data.size(0), args.n_class, device=net.device)
+        classvalue = torch.zeros(data.size(0), jparams['n_class'], device=net.device)
 
-        for i in range(args.n_class):
+        for i in range(jparams['n_class']):
             indice = (response == i).nonzero(as_tuple=True)[0]
             #TODO need to consider the situation that one class is not presented
             if len(indice) == 0:
@@ -400,7 +407,7 @@ def test_Xth(net, args, test_loader, response, spike_record=0):
     return test_error_av, test_error_max
 
 
-def test_bp(net, args, test_loader):
+def test_bp(net, test_loader):
     '''
     Function to test the network
     '''
@@ -418,7 +425,7 @@ def test_bp(net, args, test_loader):
             data = data.to(net.device)
             targets = targets.to(net.device)
 
-        output = net(args, data.to(torch.float32))
+        output = net(data.to(torch.float32))
 
         # calculate the total testing times and record the testing labels
         total_test += targets.size()[0]
@@ -432,7 +439,7 @@ def test_bp(net, args, test_loader):
     return test_error
 
 
-def initDataframe(path, args, net, method='bp', dataframe_to_init='results.csv'):
+def initDataframe(path, method='bp', dataframe_to_init='results.csv'):
     '''
     Initialize a dataframe with Pandas so that parameters are saved
     '''
@@ -475,7 +482,7 @@ def initXthframe(path, dataframe_to_init='Xth_norm.csv'):
 
 
 
-def updateDataframe(BASE_PATH, args, dataframe, net, test_error_list_av, test_error_list_max):
+def updateDataframe(BASE_PATH, dataframe, test_error_list_av, test_error_list_max):
     '''
     Add data to the pandas dataframe
     '''
@@ -519,8 +526,7 @@ def updateXthframe(BASE_PATH, dataframe, Xth_norm):
     return dataframe
 
 
-
-def createPath(args):
+def createPath():
     '''
     Create path to save data
     '''
@@ -540,8 +546,8 @@ def createPath(args):
     #
     # BASE_PATH += prefix + args.action
     #
-    # BASE_PATH += prefix + str(len(args.layersList)-2) + 'hidden'
-    # BASE_PATH += prefix + 'hidNeu' + str(args.layersList[1])
+    # BASE_PATH += prefix + str(len(args.fcLayers)-2) + 'hidden'
+    # BASE_PATH += prefix + 'hidNeu' + str(args.fcLayers[1])
     #
     # BASE_PATH += prefix + 'β-' + str(args.beta)
     # BASE_PATH += prefix + 'dt-' + str(args.dt)
@@ -583,7 +589,7 @@ def createPath(args):
     return BASE_PATH, name
 
 
-def saveHyperparameters(args, net, BASE_PATH):
+def saveHyperparameters(args, BASE_PATH):
     '''
     Save all hyperparameters in the path provided
     '''
