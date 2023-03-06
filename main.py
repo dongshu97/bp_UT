@@ -206,14 +206,14 @@ if jparams['dataset'] == 'mnist':
 
         train_loader = torch.utils.data.DataLoader(train_set, batch_size=jparams['batchSize'], shuffle=True)
 
-    elif jparams['action'] == 'bp':
+    else:
+    # elif jparams['action'] == 'bp':
         train_set = torchvision.datasets.MNIST(root='./data', train=True, download=True,
                                                transform=torchvision.transforms.Compose(transforms),
                                                target_transform=ReshapeTransformTarget(10))
 
         train_loader = torch.utils.data.DataLoader(train_set, batch_size=jparams['batchSize'], shuffle=True)
 
-    
     # Load the dataset
     # TODO change the target (do not use the ReshapeTransformTarget)
 
@@ -223,7 +223,7 @@ if jparams['dataset'] == 'mnist':
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=jparams['test_batchSize'], shuffle=True)
 
     # define the class dataset
-    seed = 1
+    seed = 34
 
     # create the class
     x = train_set.data
@@ -238,22 +238,22 @@ if jparams['dataset'] == 'mnist':
     # class_set = ClassDataset(root='./MNIST_class_seed', test_set=test_set, seed=seed,
     #                          transform=torchvision.transforms.Compose(transforms))
 
-    # TODO
-    #torch.manual_seed(seed)
-
     if jparams['device'] >= 0:
-        class_loader = torch.utils.data.DataLoader(class_set, batch_size=1000, shuffle=True)
+        class_loader = torch.utils.data.DataLoader(class_set, batch_size=1200, shuffle=True)
     else:
         class_loader = torch.utils.data.DataLoader(class_set, batch_size=jparams['test_batchSize'], shuffle=True)
+    layer_loader = torch.utils.data.DataLoader(layer_set, batch_size=1200, shuffle=True)
 
     # for batch_idx, (data, targets) in enumerate(train_loader):
     #     data_average = torch.mean(torch.norm(data,dim=1))
     #     print('the average of dataset is:', data_average)
 
 # </editor-fold>
+# TODO CIFAR-10 to be re-modified
 elif jparams['dataset'] == 'cifar10':
 
     print('We use the CIFAR10 dataset')
+
     # Define the Transform
     if jparams['convNet']:
         transform_type = transforms.ToTensor()
@@ -297,6 +297,7 @@ elif jparams['dataset'] == 'YinYang':
 
     test_set = YinYangDataset(size=1000, seed=40)
 
+    # the seed of classification is same as that of train/test
     class_set = YinYangDataset(size=1000, seed=42, sub_class=True)
     layer_set = YinYangDataset(size=1000, seed=42, sub_class=True, target_transform=ReshapeTransformTarget(3))
 
@@ -312,17 +313,8 @@ if __name__ == '__main__':
     # mean_digits = torch.mean(torch.norm(torch.from_numpy(digits.data/16), dim=1))
     # print('the average norm of digits is:', mean_digits)
 
-
-
     # create the network
     net = Net(jparams)
-
-    # we reverse the input layers if we want to load the trained EP model
-    if jparams['action'] =='visuEP':
-        W_reverse = nn.ModuleList(None)
-        for i in range(len(jparams['fcLayers'])-1):
-            W_reverse.append(net.W[len(jparams['fcLayers'])-2-i])
-        net.W = W_reverse
 
     # Cuda problem
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -337,12 +329,16 @@ if __name__ == '__main__':
     # Create the data dossier
     BASE_PATH, name = createPath()
 
+    # save hyper-parameters as json file
+    with open(BASE_PATH + prefix + "config.json", "w") as outfile:
+        json.dump(jparams, outfile)
+
     # <editor-fold desc="Train with supervised BP">
     if jparams['action'] == 'bp':
 
         print("Training the network with supervised bp")
         #saveHyperparameters(args, net, BASE_PATH)
-        DATAFRAME = initDataframe(BASE_PATH, method=jparams['action'])
+        DATAFRAME = initDataframe(BASE_PATH, method='bp')
         print(DATAFRAME)
 
         train_error = []
@@ -350,7 +346,6 @@ if __name__ == '__main__':
 
         for epoch in tqdm(range(jparams['epochs'])):
 
-            #train_error_epoch = train_bp(net, args, train_loader, epoch, method=args.action)
             train_error_epoch = train_bp(net, jparams, train_loader, epoch)
             train_error.append(train_error_epoch.item())
 
@@ -367,7 +362,7 @@ if __name__ == '__main__':
 
         print("Training the unsupervised bp network")
         #saveHyperparameters(args, net, BASE_PATH)
-        DATAFRAME = initDataframe(BASE_PATH, net, method=jparams['action'])
+        DATAFRAME = initDataframe(BASE_PATH, method='bp_Xth')
         print(DATAFRAME)
 
         # dataframe for Xth
@@ -379,7 +374,7 @@ if __name__ == '__main__':
 
         # start = torch.cuda.Event(enable_timing=True)
         # end = torch.cuda.Event(enable_timing=True)
-        since = time.time()
+        # since = time.time()
 
         for epoch in tqdm(range(jparams['epochs'])):
             # train process
@@ -407,17 +402,43 @@ if __name__ == '__main__':
 
             # at each epoch, we update the model parameters
             torch.save(net.state_dict(), BASE_PATH + prefix + 'model_state_dict.pt')
-            # TODO we can also save the whole model (with all the functions included)
-        time_elapsed = time.time() - since
-        print('Training complete in {:.0f}m {:.0f}s'.format(
-            time_elapsed // 60, time_elapsed % 60))
+
+        # create the classification layer
+        class_net = Classlayer(jparams)
+
+        # create dataframe for classification layer
+        class_dataframe = initDataframe(BASE_PATH, method='classification_layer',
+                                        dataframe_to_init='classification_layer.csv')
+        torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict_0.pt')
+        class_train_error_list = []
+        final_test_error_list = []
+        final_loss_error_list = []
+
+        # at the end of unsupervised learning we train the final classification layer
+        for epoch in tqdm(range(jparams['class_epoch'])):
+            # we train the classification layer
+            class_train_error_epoch = classify_network(net, class_net, jparams, layer_loader)
+            class_train_error_list.append(class_train_error_epoch.item())
+            # we test the final test error
+            final_test_error_epoch, final_loss_epoch = test_unsupervised_layer(net, class_net, jparams, test_loader)
+            final_test_error_list.append(final_test_error_epoch.item())
+            final_loss_error_list.append(final_loss_epoch.item())
+            class_dataframe = updateDataframe(BASE_PATH, class_dataframe, class_train_error_list, final_test_error_list,
+                                              filename='classification_layer.csv', loss=final_loss_error_list)
+
+            # save the trained class_net
+            torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict.pt')
+
+        # time_elapsed = time.time() - since
+        # print('Training complete in {:.0f}m {:.0f}s'.format(
+        #     time_elapsed // 60, time_elapsed % 60))
 
     # </editor-fold>
 
     # <editor-fold desc="Test a training methods with little dataset">
     elif jparams['action'] == 'test':
+        '''plot the evolution of homeostasis term with a little subset'''
 
-        # create the mini dataset to be tested
         iterations = 50
         train_iterator = iter(train_loader)
         test_iterator = iter(test_loader)
@@ -504,9 +525,7 @@ if __name__ == '__main__':
     elif jparams['action'] == 'visu':
 
         # we re-load the trained network
-        net.load_state_dict(torch.load(r'D:\Results_data\Visualization_BP_batchmode\784-1024-500\error0.0617\model_state_dict.pt'))
-
-
+        net.load_state_dict(torch.load(r'D:\Results_data\BP_batchHomeo_hiddenlayer\784-1024-500-N4-lr0.179539-gamma0.074828-batch105-epoch250\S-9\model_state_dict.pt'))
         net.eval()
 
         # we make the classification
@@ -520,9 +539,41 @@ if __name__ == '__main__':
         print('the one2one av is :', test_error_av_epoch)
         print('the one2one max is :', test_error_max_epoch)
 
+        # we train the classification layer
+        class_net = Classlayer(jparams)
+
+        # create dataframe for classification layer
+        class_dataframe = initDataframe(BASE_PATH, method='classification_layer',
+                                        dataframe_to_init='classification_layer.csv')
+        torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict_0.pt')
+        class_train_error_list = []
+        final_test_error_list = []
+        final_loss_error_list = []
+
+        # at the end of unsupervised learning we train the final classification layer
+        for epoch in tqdm(range(jparams['class_epoch'])):
+            # we train the classification layer
+            class_train_error_epoch = classify_network(net, class_net, jparams, layer_loader)
+            class_train_error_list.append(class_train_error_epoch.item())
+            # we test the final test error
+            final_test_error_epoch, final_loss_epoch = test_unsupervised_layer(net, class_net, jparams, test_loader)
+            final_test_error_list.append(final_test_error_epoch.item())
+            final_loss_error_list.append(final_loss_epoch.item())
+            class_dataframe = updateDataframe(BASE_PATH, class_dataframe, class_train_error_list, final_test_error_list,
+                                              filename='classification_layer.csv', loss=final_loss_error_list)
+
+            # save the trained class_net
+            torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict.pt')
     # </editor-fold>
 
     elif jparams['action'] =='visuEP':
+        # TODO modify to be compatible with the git code
+
+        # we reverse the input layers if we want to load the trained EP model
+        W_reverse = nn.ModuleList(None)
+        for i in range(len(jparams['fcLayers']) - 1):
+            W_reverse.append(net.W[len(jparams['fcLayers']) - 2 - i])
+        net.W = W_reverse
 
         # we re-load the trained network
         # TODO this works only for the non-jit EP version, do also for the jit EP
@@ -644,8 +695,8 @@ if __name__ == '__main__':
             #
             #     output = output.view(output.size(0), -1)
             #     for k in range(j + 1):
-            #         rho = args.rho[k]
-            #         output = net.rho(net.W[k](output), rho)
+            #         activation = args.activation_function[k]
+            #         output = net.rho(net.W[k](output), activation)
             #     # output size will be (batch, neuron_number), so it should be a identity matrix
             #     loss = 1-output
             #     # error !!!  grad can be implicitly created only for scalar outputs
@@ -677,11 +728,11 @@ if __name__ == '__main__':
 
                     for k in range(j+1):
                         if k == j:
-                            rho = 'x'
+                            activation = 'x'
                         else:
-                            rho = jparams['rho'][k]
+                            activation = jparams['activation_function'][k]
 
-                        output = net.rho(net.W[k](output), rho)
+                        output = net.rho(net.W[k](output), activation)
 
                     # print(output)
                     # TODO try to update the loss by 1-output[0,i]

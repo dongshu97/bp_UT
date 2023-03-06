@@ -14,7 +14,7 @@ class Net(nn.Module):
         self.output = jparams['fcLayers'][-1]
         self.convNet = jparams['convNet']
         self.fcLayers = jparams['fcLayers']
-        self.rho = jparams['rho']
+        self.activation = jparams['activation_function']
 
         # TODO redefine the convolutional layer with new hyper-parameters
         if self.convNet:
@@ -90,11 +90,11 @@ class Net(nn.Module):
             x = x.view(x.size(0), -1)
 
         for i in range(len(self.fcLayers)-1):
-            x = self.rho(self.W[i](x), self.rho[i])
+            x = self.rho(self.W[i](x), self.activation[i])
 
         return x
     # for i in range(len(args.fcLayers)-1):
-    #         x = self.rho(self.W[i](x), args.rho[i])
+    #         x = self.rho(self.W[i](x), self.activation[i])
 
         return output
 
@@ -222,7 +222,7 @@ class Classlayer(nn.Module):
         super(Classlayer, self).__init__()
         # output_neuron=args.n_class
         self.output = jparams['n_class']
-        self.input = jparams['fcLayers'][0]
+        self.input = jparams['fcLayers'][-1]
         self.activation = jparams['class_activation']
         # define the classification layer
         self.class_layer = nn.Linear(self.input, self.output, bias=True)

@@ -138,7 +138,7 @@ def classify_layers(net, jparams, class_loader):
                     result_outputs[i][0] = torch.cat((result_outputs[i][0], output.detach()), 0)
 
         for i in range(len(jparams['fcLayers'])-1):
-            x = net.rho(net.W[i](x), jparams['rho'][i])
+            x = net.rho(net.W[i](x), jparams['activation_function'][i])
             output = x.clone()
 
             if batch_idx == 0:
@@ -150,6 +150,55 @@ def classify_layers(net, jparams, class_loader):
     all_responses, total_unclassified = cluster(class_vector, result_outputs, jparams['n_class'], net.device)
 
     return all_responses, total_unclassified
+
+
+def classify_network(net, class_net, jparams, layer_loader):
+    net.eval()
+    class_net.train()
+
+    # define the loss of classification layer
+    if jparams['class_activation'] == 'softmax':
+        criterion = torch.nn.CrossEntropyLoss()
+    else:
+        criterion = torch.nn.MSELoss()
+
+    parameters = list(class_net.parameters())
+
+    # create the list for training errors
+    correct_train = torch.zeros(1, device=net.device).squeeze()
+    total_train = torch.zeros(1, device=net.device).squeeze()
+
+    # construct the optimizer
+    if jparams['class_Optimizer'] == 'Adam':
+        optimizer = torch.optim.Adam(parameters, lr=jparams['class_lr'])
+    elif jparams['class_Optimizer'] == 'SGD':
+        optimizer = torch.optim.SGD(parameters, lr=jparams['class_lr'])
+
+    for batch_idx, (data, targets) in enumerate(layer_loader):
+        optimizer.zero_grad()
+
+        if net.cuda:
+            data = data.to(net.device)
+            targets = targets.to(net.device)
+
+        # net forward
+        with torch.no_grad():
+            x = net(data.to(torch.float32))
+        # class_net forward
+        output = class_net.forward(x)
+        loss = criterion(output, targets.to(torch.float32))
+        # backpropagation
+        loss.backward()
+        optimizer.step()
+
+        # calculate the training errors
+        prediction = torch.argmax(output, dim=1)
+        correct_train += (prediction == torch.argmax(targets, dim=1)).sum().float()
+        total_train += targets.size(dim=0)
+
+    # calculate the train error
+    train_error = 1 - correct_train / total_train
+    return train_error
 
 
 def train_Xth(net, jparams, train_loader, epoch, supervised_response=None):
@@ -439,6 +488,50 @@ def test_bp(net, test_loader):
     return test_error
 
 
+def test_unsupervised_layer(net, class_net, jparams, test_loader):
+    net.eval()
+    class_net.eval()
+
+    # create the list for testing errors
+    correct_test = torch.zeros(1, device=net.device).squeeze()
+    total_test = torch.zeros(1, device=net.device).squeeze()
+    loss_test = torch.zeros(1, device=net.device).squeeze()
+    total_batch = torch.zeros(1, device=net.device).squeeze()
+
+    for batch_idx, (data, targets) in enumerate(test_loader):
+
+        total_batch += 1
+
+        if net.cuda:
+            data = data.to(net.device)
+            targets = targets.to(net.device)
+
+        # record the total test
+        total_test += targets.size()[0]
+
+        # net forward
+        x = net(data.to(torch.float32))
+        # class_net forward
+        output = class_net.forward(x)
+        # calculate the loss
+        if jparams['class_activation'] == 'softmax':
+            loss = F.cross_entropy(output, targets)
+        else:
+            loss = F.mse_loss(output, F.one_hot(targets, num_classes=jparams['n_class']))
+
+        loss_test += loss.item()
+
+        # calculate the training errors
+        prediction = torch.argmax(output, dim=1)
+        correct_test += (prediction == targets).sum().float()
+
+    # calculate the test error
+    test_error = 1 - correct_test / total_test
+    loss_test = loss_test/total_batch
+
+    return test_error, loss_test
+
+
 def initDataframe(path, method='bp', dataframe_to_init='results.csv'):
     '''
     Initialize a dataframe with Pandas so that parameters are saved
@@ -453,11 +546,16 @@ def initDataframe(path, method='bp', dataframe_to_init='results.csv'):
     else:
         if method == 'bp':
             columns_header = ['Train_Error', 'Min_Train_Error', 'Test_Error', 'Min_Test_Error']
-        else:
+        elif method == 'bp_Xth':
             columns_header = ['One2one_av_Error', 'Min_One2one_av', 'One2one_max_Error', 'Min_One2one_max_Error']
+        elif method == 'classification_layer':
+            columns_header = ['Train_Class_Error', 'Min_Train_Class_Error', 'Final_Test_Error', 'Min_Final_Test_Error',
+                              'Final_Test_Loss', 'Min_Final_Test_Loss']
+        else:
+            raise ValueError("The method {} is not defined".format(method))
 
         dataframe = pd.DataFrame({}, columns=columns_header)
-        dataframe.to_csv(path + prefix + 'results.csv')
+        dataframe.to_csv(path + prefix + dataframe_to_init)
     return dataframe
 
 
@@ -482,7 +580,7 @@ def initXthframe(path, dataframe_to_init='Xth_norm.csv'):
 
 
 
-def updateDataframe(BASE_PATH, dataframe, test_error_list_av, test_error_list_max):
+def updateDataframe(BASE_PATH, dataframe, error1, error2, filename='results.csv', loss=None):
     '''
     Add data to the pandas dataframe
     '''
@@ -490,17 +588,19 @@ def updateDataframe(BASE_PATH, dataframe, test_error_list_av, test_error_list_ma
         prefix = '\\'
     else:
         prefix = '/'
-
-    data = [test_error_list_av[-1], min(test_error_list_av), test_error_list_max[-1], min(test_error_list_max)]
+    if loss is None:
+        data = [error1[-1], min(error1), error2[-1], min(error2)]
+    else:
+        data = [error1[-1], min(error1), error2[-1], min(error2), loss[-1], min(loss)]
 
     new_data = pd.DataFrame([data], index=[1], columns=dataframe.columns)
 
     dataframe = pd.concat([dataframe, new_data], axis=0)
 
     try:
-        dataframe.to_csv(BASE_PATH + prefix + 'results.csv')
+        dataframe.to_csv(BASE_PATH + prefix + filename)
     except PermissionError:
-        input("Close the result.csv and press any key.")
+        input("Close the {} and press any key.".format(filename))
 
     return dataframe
 
