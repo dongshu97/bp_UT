@@ -211,6 +211,7 @@ def train_Xth(net, jparams, train_loader, epoch, supervised_response=None):
         criterion = torch.nn.MSELoss()
     elif jparams['lossFunction'] == 'Cross-entropy':
         criterion = torch.nn.CrossEntropyLoss()
+
     Xth = torch.zeros(jparams['fcLayers'][-1], device=net.device)
     # construct the layer-wise parameters
     layer_names = []
@@ -300,7 +301,10 @@ def train_bp(net, jparams, train_loader, epoch):
     net.epoch = epoch+1
 
     # construct the loss function
-    criterion = torch.nn.MSELoss()
+    if jparams['lossFunction'] == 'MSE':
+        criterion = torch.nn.MSELoss()
+    elif jparams['lossFunction'] == 'Cross-entropy':
+        criterion = torch.nn.CrossEntropyLoss()
 
     # construct the layer-wise parameters
     layer_names = []
