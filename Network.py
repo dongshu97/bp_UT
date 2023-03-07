@@ -11,21 +11,24 @@ class Net(nn.Module):
 
         self.batchSize = jparams['batchSize']
         self.eta = jparams['eta']
-        self.output = jparams['fcLayers'][-1]
+        self.output_num = jparams['fcLayers'][-1]
         self.convNet = jparams['convNet']
         self.fcLayers = jparams['fcLayers']
         self.activation = jparams['activation_function']
+        self.Dropout = jparams['Dropout']
+        self.conv_number = 0
 
         # TODO redefine the convolutional layer with new hyper-parameters
         if self.convNet:
             self.Conv = nn.ModuleList(None)
-            conv_number = int(len(jparams['convLayers']) / 5)
+            conv_number = int(len(jparams['C_list'])-1)
             self.conv_number = conv_number
             for i in range(conv_number):
-                self.Conv.append(nn.Conv2d(in_channels=jparams['convLayers'][i*5], out_channels=jparams['convLayers'][i*5+1],
-                                           kernel_size=jparams['convLayer'][i*5+2], stride=jparams['convLayer'][i*5+3],
-                                           padding=jparams['convLayer'][i*5+4]))
-            self.pool = nn.MaxPool2d(kernel_size=2)
+                self.Conv.append(nn.Conv2d(in_channels=jparams['C_list'][i], out_channels=jparams['C_list'][i+1],
+                                           kernel_size=jparams['convF'], stride=1,
+                                           padding=jparams['padding']))
+
+            self.pool = nn.MaxPool2d(kernel_size=jparams['Fpool'])
 
             #
             # self.conv1 = nn.Sequential(
@@ -49,9 +52,13 @@ class Net(nn.Module):
             # )
         # fully connected layer, output 10 classes
         self.W = nn.ModuleList(None)
-        with torch.no_grad():
-            for i in range(len(jparams['fcLayers']) - 1):
-                self.W.extend([nn.Linear(jparams['fcLayers'][i], jparams['fcLayers'][i + 1], bias=True)])
+        for i in range(len(jparams['fcLayers']) - 1):
+            self.W.extend([nn.Linear(jparams['fcLayers'][i], jparams['fcLayers'][i + 1], bias=True)])
+
+        if self.Dropout:
+            self.drop_layers = nn.ModuleList(None)
+            for i in range(len(jparams['dropProb'])):
+                self.drop_layers.extend([nn.Dropout(p=jparams['dropProb'][i])])
 
         # put model on GPU is available and asked
         if jparams['device'] >= 0 and torch.cuda.is_available():
@@ -79,24 +86,35 @@ class Net(nn.Module):
             return 0.5+0.5*torch.tanh(x)
 
     def forward(self, x):
-        # TODO we can remove the args in the input variables
-        if self.convNet:
-            for i in range(self.conv_number):
-                x = self.conv_number[i](x)
-                x = F.relu(x),
-                x = self.pool(x)
+        if self.Dropout:
+            if self.convNet:
+                for i in range(self.conv_number):
+                    x = self.conv_number[i](x)
+                    x = F.relu(x),
+                    x = self.pool(x)
+                    x = self.drop_layers[i](x)
 
-            # flatten the output of conv2 to (batch_size, 32 * 7 * 7)
-            x = x.view(x.size(0), -1)
+                # flatten the output of conv2 to (batch_size, 32 * 7 * 7)
+                x = x.view(x.size(0), -1)
 
-        for i in range(len(self.fcLayers)-1):
-            x = self.rho(self.W[i](x), self.activation[i])
+            for i in range(len(self.fcLayers) - 1):
+                x = self.rho(self.W[i](x), self.activation[i])
+                x = self.drop_layers[i+self.conv_number](x)
+
+        else:
+            if self.convNet:
+                for i in range(self.conv_number):
+                    x = self.conv_number[i](x)
+                    x = F.relu(x),
+                    x = self.pool(x)
+
+                # flatten the output of conv2 to (batch_size, 32 * 7 * 7)
+                x = x.view(x.size(0), -1)
+
+            for i in range(len(self.fcLayers)-1):
+                x = self.rho(self.W[i](x), self.activation[i])
 
         return x
-    # for i in range(len(args.fcLayers)-1):
-    #         x = self.rho(self.W[i](x), self.activation[i])
-
-        return output
 
     def defi_target_01(self, output, N, penalty_gate='NON'):
 
@@ -112,7 +130,7 @@ class Net(nn.Module):
         # Can RP be compatible with batch???
         if penalty_gate != 'NON':
             for i in range(output.size()[0]):
-                for out in range(self.output):
+                for out in range(self.output_num):
                     # TODO here penalty gate is a vector considering only one image
                     if penalty_gate[out] == 1:
                         m_output[i, out] = -1
@@ -183,7 +201,7 @@ class Net(nn.Module):
         #
         # if indices_0.nelement() != 0:
         #     for i in range(indices_0.nelement()):
-        #         N_maxindex[indices_0[i], :] = torch.randint(0, self.output-1, (N,))
+        #         N_maxindex[indices_0[i], :] = torch.randint(0, self.output_num-1, (N,))
 
         # unsupervised_targets[N_maxindex] = 1
         unsupervised_targets.scatter_(1, N_maxindex, torch.ones(output.size(), device=self.device))
@@ -221,11 +239,11 @@ class Classlayer(nn.Module):
     def __init__(self, jparams):
         super(Classlayer, self).__init__()
         # output_neuron=args.n_class
-        self.output = jparams['n_class']
+        self.output_num = jparams['n_class']
         self.input = jparams['fcLayers'][-1]
         self.activation = jparams['class_activation']
         # define the classification layer
-        self.class_layer = nn.Linear(self.input, self.output, bias=True)
+        self.class_layer = nn.Linear(self.input, self.output_num, bias=True)
 
         if jparams['device'] >= 0 and torch.cuda.is_available():
             device = torch.device("cuda:" + str(jparams['device']))
