@@ -525,7 +525,7 @@ if __name__ == '__main__':
     elif jparams['action'] == 'visu':
 
         # we re-load the trained network
-        net.load_state_dict(torch.load(r'D:\Results_data\BP_batchHomeo_hiddenlayer\784-1024-500-N4-lr0.179539-gamma0.074828-batch105-epoch250\S-9\model_state_dict.pt'))
+        net.load_state_dict(torch.load(r'D:\bp_convnet\DATA-0\2023-03-09\S-1\model_state_dict.pt'))
         net.eval()
 
         # we make the classification
@@ -661,7 +661,10 @@ if __name__ == '__main__':
     if jparams['maximum_activation']:
         # TODO do parallelization for the image and select the neuron number at the beginning
         # return the responses of each layer
-        all_responses, total_unclassified = classify_layers(net, jparams, class_loader)
+
+        k_select_neurons = jparams['select_num']
+
+        all_responses, max_response_neurons, total_unclassified = classify_layers(net, jparams, class_loader, k_select_neurons)
 
         # create the maximum activation dossier
         path_activation = pathlib.Path(BASE_PATH + prefix + 'maxActivation')
@@ -679,8 +682,10 @@ if __name__ == '__main__':
         # This part does not apply the batch
         for j in range(len(jparams['fcLayers'])-1):
             if jparams['dataset'] == 'mnist':
-
-                image_max = torch.zeros(jparams['fcLayers'][j+1], 28*28)
+                neurons_range = max_response_neurons[j][0].cpu().tolist()
+                image_max = torch.zeros(len(neurons_range), 28 * 28)
+                #image_max = torch.zeros(jparams['fcLayers'][j+1], 28*28)
+                optimized_image = 0
                 # image dimension (batch, channel, height, width)
                 # image_max = torch.rand(args.fcLayers[j+1], 1, 28, 28, requires_grad=True, device=net.device)
 
@@ -711,7 +716,7 @@ if __name__ == '__main__':
 
             # TODO the following part is the original model
 
-            for i in range(jparams['fcLayers'][j+1]):
+            for i in neurons_range:
                 #image = torch.rand(args.fcLayers[0], 1, requires_grad=True, device=net.device)
                 if jparams['dataset'] == 'mnist':
                     image = torch.rand(1, 1, 28, 28, requires_grad=True, device=net.device)
@@ -741,7 +746,8 @@ if __name__ == '__main__':
                     loss.backward()
                     optimizer.step()
                     image = (data_average * (image.data / torch.norm(image.data).item())).requires_grad_(True)
-                image_max[i, :] = torch.flatten(image).detach().cpu()
+                image_max[optimized_image, :] = torch.flatten(image).detach().cpu()
+                optimized_image += 1
             figName = 'layer' + str(j) + ' max activation figures'
             imShape = jparams['imShape'][0:2]
             display = jparams['display'][2 * j:2 * j + 2]
@@ -749,17 +755,22 @@ if __name__ == '__main__':
             # calculate
             neurons_each_class = int(jparams['fcLayers'][j+1]/jparams['n_class'])
 
-            if neurons_each_class <= 5:
-                plot_imshow(image_max, jparams['fcLayers'][j+1], display, imShape, figName, path_activation, prefix, all_responses[j][0])
+            plot_imshow(image_max, len(neurons_range), display, imShape, figName, path_activation, prefix)
 
-            elif neurons_each_class <= 10:
-                plot_NeachClass(image_max, jparams['n_class'], neurons_each_class, display, imShape,
-                                all_responses[j][0], figName, path_activation, prefix)
-            else:
-                # TODO change back the 2 to 10
-                #plot_NeachClass(image_max, args.n_class, 10, imShape,all_responses[j][0], figName, path_activation, prefix)
-                plot_NeachClass(image_max, jparams['n_class'], 2, display, imShape, all_responses[j][0], figName, path_activation,
-                                prefix)
+            # plot_imshow(image_max, jparams['n_class'], display, imShape, figName, path_activation, prefix,
+            #             all_responses[j][0])
+            #
+            # if neurons_each_class <= 5:
+            #     plot_imshow(image_max, jparams['fcLayers'][j+1], display, imShape, figName, path_activation, prefix, all_responses[j][0])
+            #
+            # elif neurons_each_class <= 10:
+            #     plot_NeachClass(image_max, jparams['n_class'], neurons_each_class, display, imShape,
+            #                     all_responses[j][0], figName, path_activation, prefix)
+            # else:
+            #     # TODO change back the 2 to 10
+            #     #plot_NeachClass(image_max, args.n_class, 10, imShape,all_responses[j][0], figName, path_activation, prefix)
+            #     plot_NeachClass(image_max, jparams['n_class'], 2, display, imShape, all_responses[j][0], figName, path_activation,
+            #                     prefix)
 
                 # whether print the images for each single class
 

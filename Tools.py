@@ -64,15 +64,20 @@ def classify(net, jparams, class_loader):
 
     return response
 
-# TODO what for???
-def cluster(class_vector, result_output, n_class, device):
+
+def cluster(class_vector, result_output, n_class, device, k_select):
 
     responses = [[] for k in range(len(result_output))]
+    max_response_neurons = [[] for k in range(len(result_output))]
+
     total_unclassifited = []
 
     for i in range(len(result_output)):
 
         class_moyenne = torch.zeros((n_class, result_output[i][0].size()[1]), device=device)
+
+        if k_select > result_output[i][0].size()[1]:
+            raise ValueError("The presented neurons number is larger than the number of neurons in layer {}".format(i))
 
         for n in range(n_class):
             indice = (class_vector == n).nonzero(as_tuple=True)[0]
@@ -82,18 +87,21 @@ def cluster(class_vector, result_output, n_class, device):
         # for the unclassified neurons, we kick them out from the responses
         unclassified = 0
         response_layer = torch.argmax(class_moyenne, 0)
+        k_select_layer = torch.topk(class_moyenne, k_select, dim=1).indices
         # TODO verify max0_indice
         max0_indice = (torch.max(class_moyenne, 0).values == 0).nonzero(as_tuple=True)[0]
         response_layer[max0_indice] = -1
         unclassified += max0_indice.size(0)
         # add the responses to blank list
         responses[i].append(response_layer)
+        max_response_neurons[i].append(k_select_layer.flatten())
+
         total_unclassifited.append(unclassified)
 
-    return responses, total_unclassifited
+    return responses, max_response_neurons, total_unclassifited
 
 
-def classify_layers(net, jparams, class_loader):
+def classify_layers(net, jparams, class_loader, k_select):
     '''To the give the class for each hidden layer'''
 
     net.eval()
@@ -147,9 +155,9 @@ def classify_layers(net, jparams, class_loader):
                 result_outputs[i + conv_number][0] = torch.cat((result_outputs[i + conv_number][0], output.detach()), 0)
 
     ##################### classifier one2one ########################
-    all_responses, total_unclassified = cluster(class_vector, result_outputs, jparams['n_class'], net.device)
+    all_responses, max_response_neurons, total_unclassified = cluster(class_vector, result_outputs, jparams['n_class'], net.device, k_select)
 
-    return all_responses, total_unclassified
+    return all_responses, max_response_neurons, total_unclassified
 
 
 def classify_network(net, class_net, jparams, layer_loader):
