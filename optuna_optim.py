@@ -166,10 +166,8 @@ def jparamsCreate(pre_config, trial):
 
     # if jparams["dataset"] == 'mnist':
     #     jparams["class_seed"] = trial.suggest_int("class_seed", 0, 42)
-
+    jparams["class_seed"] = 34
     if jparams["action"] == 'bp_Xth':
-
-        jparams["class_seed"] = 34
 
         if jparams['Homeo_mode'] == 'batch':
             jparams["batchSize"] = trial.suggest_int("batchSize", 10, 256)
@@ -192,14 +190,15 @@ def jparamsCreate(pre_config, trial):
 
         jparams["Optimizer"] = trial.suggest_categorical("Optimizer", ['SGD', 'Adam'])
 
-        if jparams["Dropout"]:
-            dropProb = [0.2]
-
-            for i in range(len(jparams["fcLayers"]) - 1):
-                drop_i = trial.suggest_float("drop" + str(i), 0.01, 1, log=True)
-                # to verify whether we need to change the name of drop_i
-                dropProb.append(drop_i)
-            jparams["dropProb"] = dropProb.copy()
+        # if jparams["Dropout"]:
+        #     dropProb = [0.2]
+        #
+        #     for i in range(len(jparams["fcLayers"]) - 1):
+        #         drop_i = trial.suggest_float("drop" + str(i), 0.01, 1, log=True)
+        #         # to verify whether we need to change the name of drop_i
+        #         dropProb.append(drop_i)
+        #     jparams["dropProb"] = dropProb.copy()
+        jparams["dropProb"] = [0.2, 0.3]
 
 
     elif jparams["action"] == 'bp':
@@ -268,6 +267,7 @@ def jparamsCreate(pre_config, trial):
 
 def train_validation(jparams, net, trial, validation_loader, train_loader=None, class_loader=None, layer_loader=None, class_net=None):
     # train the model
+
     if jparams['action'] == 'bp':
         if train_loader is not None:
             print("Training the model with supervised bp")
@@ -557,7 +557,7 @@ if __name__=='__main__':
     filePath = BASE_PATH + prefix + "test.csv"
     study_name = str(time.asctime())
     study = optuna.create_study(study_name=study_name, storage='sqlite:///optuna_bp_unsupervised.db')
-    study.optimize(lambda trial: objective(trial, pre_config), n_trials=100)
+    study.optimize(lambda trial: objective(trial, pre_config), n_trials=200)
     trails = study.get_trials()
     # record trials
     df = study.trials_dataframe()
