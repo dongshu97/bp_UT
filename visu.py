@@ -32,7 +32,7 @@ def plot_imshow(x, out_nb, display, imShape, figName, path, prefix, responses=No
     fig.set_size_inches(9, 6)
 
     for i, ax in zip(range(out_nb), axes.flat):
-        plot = ax.imshow(x[i, :].reshape(imShape[0], imShape[1]), cmap=cm.coolwarm)
+        plot = ax.imshow(x[i, :].reshape(imShape[0], imShape[1]), cmap=cm.viridis)
         #ax.axis('off')
         ax.get_xaxis().set_visible(False)
         ax.get_yaxis().set_visible(False)

@@ -87,7 +87,7 @@ def cluster(class_vector, result_output, n_class, device, k_select):
         # for the unclassified neurons, we kick them out from the responses
         unclassified = 0
         response_layer = torch.argmax(class_moyenne, 0)
-        k_select_layer = torch.topk(class_moyenne, k_select, dim=1).indices
+        k_select_layer = torch.topk(class_moyenne, k_select, dim=1).indices # several classes may have one same neuron as their strongest response
         # TODO verify max0_indice
         max0_indice = (torch.max(class_moyenne, 0).values == 0).nonzero(as_tuple=True)[0]
         response_layer[max0_indice] = -1
@@ -279,15 +279,23 @@ def train_Xth(net, jparams, train_loader, epoch, supervised_response=None):
         #     assert args.batchSize == 1 and args.fcLayers[-1] == 10, 'This targets function has not been written yet'
         #     unsupervised_targets, supervised_response = net.alter_N_target_sm(output-Xth, target, supervised_response, args.nudge_N)
         # else:
-        unsupervised_targets = torch.zeros(output.size(), device=net.device)
-        unsupervised_targets.scatter_(1, torch.topk(output.detach() - Xth, jparams['nudge_N']).indices, torch.ones(output.size(), device=net.device))
 
-        target_activity = jparams['nudge_N']/jparams['fcLayers'][-1]
+        unsupervised_targets, N_maxindex = net.define_unsupervised_target(output, jparams['nudge_N'], net.device, Xth=Xth)
+        # label smoothing
+        unsupervised_targets = net.smoothLabels(unsupervised_targets, 0.2, jparams['nudge_N'])
+
+        if jparams['Dropout']:
+            target_activity = jparams['nudge_N'] / (jparams['fcLayers'][-1] * (
+                    1 - jparams['dropProb'][-1]))  # dropout influences the target activity
+        else:
+            target_activity = jparams['nudge_N'] / jparams['fcLayers'][-1]
+
         if jparams['batchSize'] == 1:
             Y_p = (1 - jparams['eta']) * Y_p + jparams['eta'] * unsupervised_targets[0]
-            Xth += jparams['gamma'] * (Y_p - target_activity)
+            Xth += net.gamma * (Y_p - target_activity)
         else:
-            Xth += jparams['gamma'] * (torch.mean(unsupervised_targets, axis=0) - target_activity)
+            Xth += net.gamma * (torch.mean(unsupervised_targets, axis=0) - target_activity)
+
 
         # calculate the loss on the gpu
         loss = criterion(output, unsupervised_targets.to(torch.float32))
@@ -343,9 +351,9 @@ def train_bp(net, jparams, train_loader, epoch):
     # construct the optimizer
     # TODO changer optimizer to ADAM
     if jparams['Optimizer'] == 'SGD':
-        optimizer = torch.optim.SGD(parameters, momentum=0.5)
+        optimizer = torch.optim.SGD(parameters, momentum=0.9)
     elif jparams['Optimizer'] == 'Adam':
-        optimizer = torch.optim.Adam(parameters, momentum=0.5)
+        optimizer = torch.optim.Adam(parameters)
     #optimizer = torch.optim.Adam(net.parameters(), lr=lr)
 
     # construct the scheduler

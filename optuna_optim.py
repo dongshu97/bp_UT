@@ -164,11 +164,14 @@ def jparamsCreate(pre_config, trial):
 
     jparams = CP.deepcopy(pre_config)
 
-    if jparams["dataset"] == 'mnist':
-        jparams["class_seed"] = trial.suggest_int("class_seed", 0, 42)
+    # if jparams["dataset"] == 'mnist':
+    #     jparams["class_seed"] = trial.suggest_int("class_seed", 0, 42)
 
-    if jparams["action"]=='bp_Xth':
-        if jparams['Homeo_mode']=='batch':
+    if jparams["action"] == 'bp_Xth':
+
+        jparams["class_seed"] = 34
+
+        if jparams['Homeo_mode'] == 'batch':
             jparams["batchSize"] = trial.suggest_int("batchSize", 10, 256)
             jparams["eta"] = 0.5
         else:
@@ -180,7 +183,7 @@ def jparamsCreate(pre_config, trial):
 
         lr = []
         for i in range(len(jparams["fcLayers"])-1):
-            lr_i =  trial.suggest_float("lr"+str(i), 1e-5, 0.1, log=True)
+            lr_i = trial.suggest_float("lr"+str(i), 1e-3, 10, log=True)
             # to verify whether we need to change the name of lr_i
             lr.append(lr_i)
         jparams["lr"] = lr.copy()
@@ -190,13 +193,14 @@ def jparamsCreate(pre_config, trial):
         jparams["Optimizer"] = trial.suggest_categorical("Optimizer", ['SGD', 'Adam'])
 
         if jparams["Dropout"]:
-            dropProb = []
+            dropProb = [0.2]
+
             for i in range(len(jparams["fcLayers"]) - 1):
                 drop_i = trial.suggest_float("drop" + str(i), 0.01, 1, log=True)
                 # to verify whether we need to change the name of drop_i
                 dropProb.append(drop_i)
             jparams["dropProb"] = dropProb.copy()
-            # jparams["dropProb"].reverse()
+
 
     elif jparams["action"] == 'bp':
 
@@ -207,7 +211,7 @@ def jparamsCreate(pre_config, trial):
 
         lr = []
         for i in range(len(jparams["fcLayers"]) - 1):
-            lr_i = trial.suggest_float("lr" + str(i), 1e-5, 0.1, log=True)
+            lr_i = trial.suggest_float("lr" + str(i), 1e-3, 10, log=True)
             # to verify whether we need to change the name of lr_i
             lr.append(lr_i)
         jparams["lr"] = lr.copy()
@@ -217,7 +221,7 @@ def jparamsCreate(pre_config, trial):
         jparams["lossFunction"] = trial.suggest_categorical("lossFunction", ['MSE', 'Cross-entropy'])
 
         if jparams["Dropout"]:
-            dropProb = []
+            dropProb = [0.2]
             for i in range(len(jparams["fcLayers"]) - 1):
                 drop_i = trial.suggest_float("drop" + str(i), 0.01, 1, log=True)
                 # to verify whether we need to change the name of drop_i
@@ -226,6 +230,8 @@ def jparamsCreate(pre_config, trial):
             # jparams["dropProb"].reverse()
 
     elif jparams["action"] == 'class_layer':
+
+        jparams["class_seed"] = trial.suggest_int("class_seed", 0, 42)
         jparams["batchSize"] = 128
         jparams["eta"] = 0.5
         jparams["gamma"] = 0.5
@@ -384,10 +390,10 @@ def objective(trial, pre_config):
 
         final_err = train_validation(jparams, net, trial, validation_loader, layer_loader=layer_loader, class_net=class_net)
 
-    elif jparams["action"] == 'unsupervised_ep':
+    elif jparams["action"] == 'bp_Xth':
         final_err = train_validation(jparams, net, trial, validation_loader, train_loader=train_loader, class_loader=class_loader)
 
-    elif jparams["action"] == 'supervised_ep':
+    elif jparams["action"] == 'bp':
         final_err = train_validation(jparams, net, trial, validation_loader, train_loader=train_loader)
 
     del(jparams)

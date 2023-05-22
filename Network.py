@@ -1,8 +1,9 @@
 from scipy import*
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import torch.nn.utils.prune as prune
 
 class Net(nn.Module):
 
@@ -17,18 +18,43 @@ class Net(nn.Module):
         self.activation = jparams['activation_function']
         self.Dropout = jparams['Dropout']
         self.conv_number = 0
+        self.W = nn.ModuleList(None)
+        self.gamma = jparams['gamma']
 
         # TODO redefine the convolutional layer with new hyper-parameters
         if self.convNet:
+            if jparams['dataset'] == 'mnist':
+                input_size = 28
+            else:
+                raise ValueError("The convolutional network now is only designed for mnist dataset")
+
             self.Conv = nn.ModuleList(None)
             conv_number = int(len(jparams['C_list'])-1)
             self.conv_number = conv_number
+
+            if jparams['padding']:
+                pad = int((jparams['convF'] - 1) / 2)
+            else:
+                pad = 0
+
             for i in range(conv_number):
                 self.Conv.append(nn.Conv2d(in_channels=jparams['C_list'][i], out_channels=jparams['C_list'][i+1],
                                            kernel_size=jparams['convF'], stride=1,
-                                           padding=jparams['padding']))
+                                           padding=pad))
 
             self.pool = nn.MaxPool2d(kernel_size=jparams['Fpool'])
+
+            size_convpool_list = [input_size]
+
+            for i in range(conv_number):
+                size_convpool_list.append(int(np.floor(
+                    (size_convpool_list[i] - jparams['convF'] + 1 + 2 * pad - jparams['Fpool']) / jparams[
+                        'Fpool'] + 1)))  # the size after the pooling layer
+
+            conv_output = jparams['C_list'][-1] * size_convpool_list[-1] ** 2
+
+            # define the fully connected layer
+            self.fcLayers.insert(0, conv_output)
 
             #
             # self.conv1 = nn.Sequential(
@@ -50,10 +76,18 @@ class Net(nn.Module):
             #     nn.ReLU(),
             #     nn.MaxPool2d(2),
             # )
-        # fully connected layer, output 10 classes
-        self.W = nn.ModuleList(None)
+
         for i in range(len(jparams['fcLayers']) - 1):
             self.W.extend([nn.Linear(jparams['fcLayers'][i], jparams['fcLayers'][i + 1], bias=True)])
+
+        # # Prune at the initialization
+        if jparams['Prune'] == 'Initialization':
+            for i in range(len(jparams['pruneAmount'])):
+                if self.convNet:
+                    prune.random_unstructured(self.convNet[i], name='weight', amount=jparams['pruneAmount'][i])
+                    # prune.remove(self.convNet[i], name='weight')
+                prune.random_unstructured(self.W[i-self.conv_number], name='weight', amount=jparams['pruneAmount'][i])
+                # prune.remove(self.W[i+self.conv_number], name='weight')
 
         if self.Dropout:
             self.drop_layers = nn.ModuleList(None)
@@ -87,19 +121,21 @@ class Net(nn.Module):
 
     def forward(self, x):
         if self.Dropout:
+            x = self.drop_layers[0](x)
+            # add the dropout
             if self.convNet:
                 for i in range(self.conv_number):
                     x = self.conv_number[i](x)
                     x = F.relu(x),
                     x = self.pool(x)
-                    x = self.drop_layers[i](x)
+                    x = self.drop_layers[i+1](x)
 
                 # flatten the output of conv2 to (batch_size, 32 * 7 * 7)
                 x = x.view(x.size(0), -1)
 
             for i in range(len(self.fcLayers) - 1):
                 x = self.rho(self.W[i](x), self.activation[i])
-                x = self.drop_layers[i+self.conv_number](x)
+                x = self.drop_layers[i+self.conv_number+1](x)
 
         else:
             if self.convNet:
@@ -179,43 +215,62 @@ class Net(nn.Module):
 
         return alter_targets, supervised_response
 
-    def defi_N_target(self, output, N):
+    def define_unsupervised_target(self, output, N, device, Xth=None):
 
-        # define unsupervised target
-        unsupervised_targets = torch.zeros(output.size(), device=self.device)
+        with torch.no_grad():
+            # define unsupervised target
+            unsupervised_targets = torch.zeros(output.size(), device=device)
 
-        # if self.cuda:
-        #     unsupervised_targets = unsupervised_targets.to(self.device)
-        #     src = src.to(self.device)
+            # N_maxindex
+            if Xth != None:
+                N_maxindex = torch.topk(output.detach() - Xth, N).indices  # N_maxindex has the size of (batch, N)
+            else:
+                N_maxindex = torch.topk(output.detach(), N).indices
 
-        # N_maxindex
-        N_maxindex = torch.topk(output.detach(), N).indices  # N_maxindex has the size of (batch, N)
-
-        # # !!! Attention if we consider the 0 and 1, which means we expect the values of input is between 0 and 1
-        # # This probability occurs when we clamp the 'vector' between 0 and 1
-        #
-        # # Extract the batch where all the outputs are 0
-        # # Consider the case where output is all 0 or 1
-        # sum_output = torch.sum(m_output, axis=1)
-        # indices_0 = (sum_output == 0).nonzero(as_tuple=True)[0]
-        #
-        # if indices_0.nelement() != 0:
-        #     for i in range(indices_0.nelement()):
-        #         N_maxindex[indices_0[i], :] = torch.randint(0, self.output_num-1, (N,))
-
-        # unsupervised_targets[N_maxindex] = 1
-        unsupervised_targets.scatter_(1, N_maxindex, torch.ones(output.size(), device=self.device))
+            unsupervised_targets.scatter_(1, N_maxindex, torch.ones(output.size(), device=device))
         # print('the unsupervised vector is:', unsupervised_targets)
 
         return unsupervised_targets, N_maxindex
 
-    '''The function below are for the homeostasis loss function'''
 
-    def calculate_average_activity(self, output, Y_av):
+    # def defi_N_target(self, output, N):
+    #
+    #     # define unsupervised target
+    #     unsupervised_targets = torch.zeros(output.size(), device=self.device)
+    #
+    #     # if self.cuda:
+    #     #     unsupervised_targets = unsupervised_targets.to(self.device)
+    #     #     src = src.to(self.device)
+    #
+    #     # N_maxindex
+    #     N_maxindex = torch.topk(output.detach(), N).indices  # N_maxindex has the size of (batch, N)
+    #
+    #     unsupervised_targets.scatter_(1, N_maxindex, torch.ones(output.size(), device=self.device))
+    #     # print('the unsupervised vector is:', unsupervised_targets)
+    #
+    #     return unsupervised_targets, N_maxindex
 
-        Y = self.eta*output + (1-self.eta)*Y_av
+    def smoothLabels(self, labels, smooth_factor, nudge_N):
+        assert len(labels.shape) == 2, 'input should be a batch of one-hot-encoded data'
+        assert 0 <= smooth_factor <= 1, 'smooth_factor should be between 0 and 1'
 
-        return Y
+        if 0 <= smooth_factor <= 1:
+            with torch.no_grad():
+                # label smoothing
+                labels *= 1 - smooth_factor
+                labels += (nudge_N * smooth_factor) / labels.shape[1]
+                labels = self.drop_layers[-1](labels)
+        else:
+            raise ValueError('Invalid label smoothing factor: ' + str(smooth_factor))
+        return labels
+
+
+    # '''The function below are for the homeostasis loss function'''
+    # def calculate_average_activity(self, output, Y_av):
+    #
+    #     Y = self.eta*output + (1-self.eta)*Y_av
+    #
+    #     return Y
 
     '''Add the weight normalization function'''
     def Weight_normal(self):

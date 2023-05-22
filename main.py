@@ -229,6 +229,20 @@ if jparams['dataset'] == 'mnist':
     x = train_set.data
     y = train_set.targets
 
+    classLabel_percentage = jparams['classLabel_percentage']
+    if jparams['classLabel_percentage'] == 1:
+        class_set = train_set
+        layer_set = torchvision.datasets.MNIST(root='./data', train=True, download=True,
+                                               transform=torchvision.transforms.Compose(transforms),
+                                               target_transform=ReshapeTransformTarget(10))
+    else:
+        class_set = splitClass(x, y, classLabel_percentage, seed=seed,
+                               transform=torchvision.transforms.Compose(transforms))
+
+        layer_set = splitClass(x, y, classLabel_percentage, seed=seed,
+                               transform=torchvision.transforms.Compose(transforms),
+                               target_transform=ReshapeTransformTarget(10))
+
     class_set = splitClass(x, y, 0.02, seed=seed, transform=torchvision.transforms.Compose(transforms))
 
     # TODO add the layer classification part
@@ -365,6 +379,12 @@ if __name__ == '__main__':
         DATAFRAME = initDataframe(BASE_PATH, method='bp_Xth')
         print(DATAFRAME)
 
+        #TODO to change it for the other uses
+
+        # # load the pre-trianed network
+        # net.load_state_dict(torch.load(
+        #     r'D:\bp_convnet\DATA-0\2023-03-15\S-12\model_state_dict.pt'))
+
         # dataframe for Xth
         Xth_dataframe = initXthframe(BASE_PATH, 'Xth_norm.csv')
 
@@ -447,7 +467,6 @@ if __name__ == '__main__':
         # we re-load the trained network
         net.load_state_dict(torch.load(
             r'C:\Users\CNRS-THALES\OneDrive\文档\Homeostasis_python\bp_convNet\analysis\784-500\BP\model_state_dict.pt'))
-
         net.train()
 
         # Define the test methods
@@ -525,7 +544,9 @@ if __name__ == '__main__':
     elif jparams['action'] == 'visu':
 
         # we re-load the trained network
-        net.load_state_dict(torch.load(r'D:\bp_convnet\DATA-0\2023-03-09\S-1\model_state_dict.pt'))
+        # net.load_state_dict(torch.load(r'D:\Results_data\Visualization_BP_batchmode\784-1024-500\error0.0617\model_state_dict.pt'))
+        net.load_state_dict(torch.load(r'D:\Results_data\Visualization_BP_batchmode\perceptron-500-lr0.1795\error0.0676\model_state_dict.pt'))
+
         net.eval()
 
         # we make the classification
@@ -569,25 +590,24 @@ if __name__ == '__main__':
     elif jparams['action'] =='visuEP':
         # TODO modify to be compatible with the git code
 
-        # we reverse the input layers if we want to load the trained EP model
-        W_reverse = nn.ModuleList(None)
-        for i in range(len(jparams['fcLayers']) - 1):
-            W_reverse.append(net.W[len(jparams['fcLayers']) - 2 - i])
-        net.W = W_reverse
+        # # we reverse the input layers if we want to load the trained EP model
+        # W_reverse = nn.ModuleList(None)
+        # for i in range(len(jparams['fcLayers']) - 1):
+        #     W_reverse.append(net.W[len(jparams['fcLayers']) - 2 - i])
+        # net.W = W_reverse
 
         # we re-load the trained network
         # TODO this works only for the non-jit EP version, do also for the jit EP
-        # the idea is to load the weights and biases trained by EP in a BP network
-        net.load_state_dict(
-            torch.load(r'D:\Results_data\Visualization_EP_batchmode\784-1024-500\error0.0587\model_state_dict.pt'))
+        # net.load_state_dict(
+        #     torch.load(r'D:\Results_data\Visualization_EP_batchmode\perceptron-500\error0.0667\model_state_dict.pt'))
 
-        # We re-reverse the layers
-        W_reverse = nn.ModuleList(None)
+        with open(r'D:\Results_data\Visualization_EP_batchmode\784-1024-1024\S-4\model_entire.pt', 'rb') as f:
+            jit_net = torch.jit.load(f)
 
         with torch.no_grad():
             for i in range(len(jparams['fcLayers']) - 1):
-                W_reverse.append(net.W[len(jparams['fcLayers']) - 2 - i])
-            net.W = W_reverse
+                net.W[i].weight.data = jit_net.W[-i-1].transpose(0, 1)
+                net.W[i].bias.data = jit_net.bias[-i-1]
 
         net.eval()
 
@@ -634,7 +654,7 @@ if __name__ == '__main__':
         # create the imShow dossier
         path_imshow = pathlib.Path(BASE_PATH + prefix + 'imShow')
         path_imshow.mkdir(parents=True, exist_ok=True)
-
+        # TODO select the neurons to present te weight
         # for several layers structure
         for i in range(len(jparams['fcLayers'])-1):
             figName = 'layer' + str(i) + ' weights'
