@@ -13,8 +13,16 @@ from Network import *
 from Tools import *
 
 # load the parameters in optuna_config
-with open('.\optuna_config.json') as f:
+
+if os.name != 'posix':
+    prefix = '\\'
+else:
+    prefix = '/'
+
+# load the parameters in optuna_config
+with open('.'+prefix + 'optuna_config.json') as f:
   pre_config = json.load(f)
+
 
 # parser = argparse.ArgumentParser(description='hyperparameter EP by optuna')
 # parser.add_argument(
@@ -283,6 +291,9 @@ def train_validation(jparams, net, trial, validation_loader, train_loader=None, 
             if trial.should_prune():
                 raise optuna.TrialPruned()
 
+        df = study.trials_dataframe()
+        df.to_csv(filePath)
+
         return validation_error_epoch
 
     elif jparams['action'] == 'bp_Xth':
@@ -304,6 +315,8 @@ def train_validation(jparams, net, trial, validation_loader, train_loader=None, 
             trial.report(error_av_epoch, epoch)
             if trial.should_prune():
                 raise optuna.TrialPruned()
+        df = study.trials_dataframe()
+        df.to_csv(filePath)
 
         return error_av_epoch
 
@@ -321,6 +334,10 @@ def train_validation(jparams, net, trial, validation_loader, train_loader=None, 
             trial.report(final_test_error_epoch, epoch)
             if trial.should_prune():
                 raise optuna.TrialPruned()
+            
+        df = study.trials_dataframe()
+        df.to_csv(filePath)
+
         return final_test_error_epoch
 
 
