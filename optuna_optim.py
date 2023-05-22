@@ -182,9 +182,9 @@ def jparamsCreate(pre_config, trial):
             jparams["eta"] = 0.5
         else:
             jparams["batchSize"] = 1,
-            jparams["eta"] = trial.suggest_float("eta", 0.001, 1, log=True)
+            jparams["eta"] = trial.suggest_float("eta", 0.01, 1, log=True)
 
-        jparams["gamma"] = trial.suggest_float("gamma", 0.001, 1, log=True)
+        jparams["gamma"] = trial.suggest_float("gamma", 0.01, 1, log=True)
         jparams["nudge_N"] = trial.suggest_int("nudge_N", 1, jparams["nudge_max"])
 
         lr = []
@@ -334,7 +334,7 @@ def train_validation(jparams, net, trial, validation_loader, train_loader=None, 
             trial.report(final_test_error_epoch, epoch)
             if trial.should_prune():
                 raise optuna.TrialPruned()
-            
+
         df = study.trials_dataframe()
         df.to_csv(filePath)
 
@@ -522,11 +522,10 @@ def optuna_createPath():
 
     BASE_PATH += prefix + datetime.datetime.now().strftime("%Y-%m-%d")
 
-
     if not os.path.exists(BASE_PATH):
         os.makedirs(BASE_PATH)
     print("len(BASE_PATH)="+str(len(BASE_PATH)))
-    filePath = shutil.copy('plotFunction.py', BASE_PATH)
+    
 
     files = os.listdir(BASE_PATH)
 
@@ -544,7 +543,6 @@ def optuna_createPath():
 
     os.mkdir(BASE_PATH)
     name = BASE_PATH.split(prefix)[-1]
-
 
     return BASE_PATH, name
 
