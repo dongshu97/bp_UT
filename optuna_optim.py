@@ -11,6 +11,8 @@ from pathlib import Path
 from Data import *
 from Network import *
 from Tools import *
+import logging
+import sys
 
 # load the parameters in optuna_config
 
@@ -189,15 +191,15 @@ def jparamsCreate(pre_config, trial):
 
         lr = []
         for i in range(len(jparams["fcLayers"])-1):
-            lr_i = trial.suggest_float("lr"+str(i), 1e-3, 10, log=True)
+            lr_i = trial.suggest_float("lr"+str(i), 1e-2, 10, log=True)
             # to verify whether we need to change the name of lr_i
             lr.append(lr_i)
         jparams["lr"] = lr.copy()
 
         # jparams['lr'].reverse()
 
-        jparams["Optimizer"] = trial.suggest_categorical("Optimizer", ['SGD', 'Adam'])
-
+        #jparams["Optimizer"] = trial.suggest_categorical("Optimizer", ['SGD', 'Adam'])
+        jparams["Optimizer"] = 'SGD'
         # if jparams["Dropout"]:
         #     dropProb = [0.2]
         #
@@ -525,7 +527,7 @@ def optuna_createPath():
     if not os.path.exists(BASE_PATH):
         os.makedirs(BASE_PATH)
     print("len(BASE_PATH)="+str(len(BASE_PATH)))
-    
+
 
     files = os.listdir(BASE_PATH)
 
@@ -571,7 +573,27 @@ if __name__=='__main__':
     # create the filepath for saving the optuna trails
     filePath = BASE_PATH + prefix + "test.csv"
     study_name = str(time.asctime())
-    study = optuna.create_study(study_name=study_name, storage='sqlite:///optuna_bp_unsupervised.db')
+    study = optuna.create_study(direction="minimize",
+                                study_name=study_name, storage='sqlite:///optuna_bp_unsupervised.db')
+
+    study.enqueue_trial(
+        {
+            "batchSize": 64,
+            "gamma": 0.8,
+            "nudge_N": 1,
+            "lr0":  0.6,
+        }
+    )
+
+    study.enqueue_trial(
+        {
+            "batchSize": 128,
+            "gamma": 0.25,
+            "nudge_N": 1,
+            "lr0":  0.4,
+        }
+    )
+    optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
     study.optimize(lambda trial: objective(trial, pre_config), n_trials=200)
     trails = study.get_trials()
     # record trials

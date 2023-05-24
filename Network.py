@@ -259,7 +259,8 @@ class Net(nn.Module):
                 # label smoothing
                 labels *= 1 - smooth_factor
                 labels += (nudge_N * smooth_factor) / labels.shape[1]
-                labels = self.drop_layers[-1](labels)
+                if self.Dropout:
+                    labels = self.drop_layers[-1](labels)
         else:
             raise ValueError('Invalid label smoothing factor: ' + str(smooth_factor))
         return labels
