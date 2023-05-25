@@ -208,7 +208,7 @@ def jparamsCreate(pre_config, trial):
         #         # to verify whether we need to change the name of drop_i
         #         dropProb.append(drop_i)
         #     jparams["dropProb"] = dropProb.copy()
-        jparams["dropProb"] = [0.2, 0.3]
+        jparams["dropProb"] = [0.2, 0.05, 0.3]
 
 
     elif jparams["action"] == 'bp':
@@ -578,23 +578,25 @@ if __name__=='__main__':
 
     study.enqueue_trial(
         {
-            "batchSize": 64,
-            "gamma": 0.8,
-            "nudge_N": 1,
-            "lr0":  0.6,
+            "batchSize": 32,
+            "gamma": 0.3,
+            "nudge_N": 5,
+            "lr0":  5.4,
+            "lr1": 4,
         }
     )
 
     study.enqueue_trial(
         {
-            "batchSize": 128,
-            "gamma": 0.25,
-            "nudge_N": 1,
-            "lr0":  0.4,
+            "batchSize": 64,
+            "gamma": 0.5,
+            "nudge_N": 5,
+            "lr0":  5.4,
+            "lr1": 5,
         }
     )
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
-    study.optimize(lambda trial: objective(trial, pre_config), n_trials=200)
+    study.optimize(lambda trial: objective(trial, pre_config), n_trials=100)
     trails = study.get_trials()
     # record trials
     df = study.trials_dataframe()
