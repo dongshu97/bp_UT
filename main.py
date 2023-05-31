@@ -20,154 +20,21 @@ from Network import *
 from Tools import *
 from visu import *
 from Data import *
-#
-# parser = argparse.ArgumentParser(description='usupervised BP')
-#
-# # <editor-fold desc="Arguments">
-# parser.add_argument(
-#     '--device',
-#     type=int,
-#     default=0,
-#     help='GPU name to use cuda')
-# parser.add_argument(
-#     '--dataset',
-#     type=str,
-#     default="mnist",
-#     help='dataset to be used to train the network : (default = mnist, other: YinYang, cifar10)')
-# parser.add_argument(
-#     '--action',
-#     type=str,
-#     default='visu',
-#     help='the type of bp test: (default = bp, other: bp_Xth, test, visu, visuEP')
-# parser.add_argument(
-#     '--epochs',
-#     type=int,
-#     default=1,
-#     metavar='N',
-#     help='number of epochs to train (default: 50)')
-# parser.add_argument(
-#     '--batchSize',
-#     type=int,
-#     default=12,
-#     help='Batch size (default=1)')
-# parser.add_argument(
-#     '--test_batchSize',
-#     type=int,
-#     default=256,
-#     help='Testing batch size (default=256)')
-# parser.add_argument(
-#     '--convNet',
-#     type=int,
-#     default=0,
-#     help='Whether to use the convNet'
-# )
-# parser.add_argument(
-#     '--convLayers',
-#     nargs='+',
-#     type=int,
-#     default=[1, 16, 5, 1, 1, 16, 32, 5, 1, 1],
-#     help='The parameters of convNet, each conv layer has 5 parameter: in_channels, out_channels, K/F, S, P')
-# parser.add_argument(
-#     '--fcLayers',
-#     nargs='+',
-#     type=int,
-#     default=[784, 1024, 500],
-#     #default=[32 * 7 * 7, 10],
-#     #default=[1600, 10],
-#     help='Structure of fully connected layers (default=300)')
-# parser.add_argument(
-#     '--lr',
-#     nargs='+',
-#     type=float,
-#     default=[0.086, 0.258],
-#     help='learning rate (default = 0.001)')
-# parser.add_argument(
-#     '--rho',
-#     nargs='+',
-#     type=str,
-#     default=['relu', 'clamp'],
-#     help='define the activation function of each layer (it has to the str type)'
-# )
-# parser.add_argument(
-#     '--lossFunction',
-#     type=str,
-#     default='MSE',
-#     help='define the loss function that we used (default: MSE, else:Cross-entropy)'
-# )
-# parser.add_argument(
-#     '--Optimizer',
-#     type=str,
-#     default='SGD',
-#     help='define the optimizer that we used (default: SGD, else:Adam)'
-# )
-# parser.add_argument(
-#     '--n_class',
-#     type=int,
-#     default=10,
-#     help='the number of the class (default = 10)')
-# parser.add_argument(
-#     '--eta',
-#     type=float,
-#     default=0.25,
-#     help='coefficient of homeostasis (default=0.6)')
-# parser.add_argument(
-#     '--gamma',
-#     type=float,
-#     default=0.07704,
-#     help='the multiplicative coefficient for Xth change'
-# )
-# parser.add_argument(
-#     '--nudge_N',
-#     type=int,
-#     default=4,
-#     help='the number of nudged neurons for each example'
-# )
-# parser.add_argument(
-#     '--iterSave',
-#     type=int,
-#     default=0,
-#     help='whether to save the model in each 10 iterations'
-# )
-# parser.add_argument(
-#     '--spike',
-#     type=int,
-#     default=0,
-#     help='whether we print out the spike results'
-# )
-# parser.add_argument(
-#     '--imWeights',
-#     type=int,
-#     default=0,
-#     help='whether we imshow the weights of synapses'
-# )
-# parser.add_argument(
-#     '--maximum_activation',
-#     type=int,
-#     default=1,
-#     help='draw the maximum activation input for each neuron'
-# )
-# parser.add_argument(
-#     '--imShape',
-#     nargs='+',
-#     type=int,
-#     default=[28, 28, 32, 32],
-#     help='decide the size for each imshow of weights'
-# )
-# parser.add_argument(
-#     '--display',
-#     nargs='+',
-#     type=int,
-#     default=[4, 5, 4, 5],
-#     help='decide the number of neurons whose weights are presented'
-# )
-# # </editor-fold>
-#
+
 parser = argparse.ArgumentParser(description='Path of json file')
 parser.add_argument(
     '--json_path',
     type=str,
     default=r'.',
+    # default=r'D:\Results_data\BP_perceptron_without_dropout\784-100',
     help='path of json configuration'
+)
+parser.add_argument(
+    '--trained_path',
+    type=str,
+    default=r'.',
+    # default=r'D:\Results_data\BP_perceptron_without_dropout\784-100\S-11',
+    help='path of model_dict_state_file'
 )
 args = parser.parse_args()
 
@@ -200,14 +67,13 @@ if jparams['dataset'] == 'mnist':
         transforms = [torchvision.transforms.ToTensor(), ReshapeTransform((-1,))]
 
     # Download the MNIST dataset
-    if jparams['action'] == 'bp_Xth' or jparams['action'] == 'test':
+    if jparams['action'] == 'bp_Xth' or jparams['action'] == 'test' or jparams['action'] == 'visu':
         train_set = torchvision.datasets.MNIST(root='./data', train=True, download=True,
                                            transform=torchvision.transforms.Compose(transforms))
 
         train_loader = torch.utils.data.DataLoader(train_set, batch_size=jparams['batchSize'], shuffle=True)
 
-    else:
-    # elif jparams['action'] == 'bp':
+    elif jparams['action'] == 'bp':
         train_set = torchvision.datasets.MNIST(root='./data', train=True, download=True,
                                                transform=torchvision.transforms.Compose(transforms),
                                                target_transform=ReshapeTransformTarget(10))
@@ -243,20 +109,11 @@ if jparams['dataset'] == 'mnist':
                                transform=torchvision.transforms.Compose(transforms),
                                target_transform=ReshapeTransformTarget(10))
 
-    class_set = splitClass(x, y, 0.02, seed=seed, transform=torchvision.transforms.Compose(transforms))
-
-    # TODO add the layer classification part
-    layer_set = splitClass(x, y, 0.02, seed=seed, transform=torchvision.transforms.Compose(transforms),
-                           target_transform=ReshapeTransformTarget(10))
-
     # class_set = ClassDataset(root='./MNIST_class_seed', test_set=test_set, seed=seed,
     #                          transform=torchvision.transforms.Compose(transforms))
 
-    if jparams['device'] >= 0:
-        class_loader = torch.utils.data.DataLoader(class_set, batch_size=1200, shuffle=True)
-    else:
-        class_loader = torch.utils.data.DataLoader(class_set, batch_size=jparams['test_batchSize'], shuffle=True)
-    layer_loader = torch.utils.data.DataLoader(layer_set, batch_size=1200, shuffle=True)
+    class_loader = torch.utils.data.DataLoader(class_set, batch_size=jparams['test_batchSize'], shuffle=True)
+    layer_loader = torch.utils.data.DataLoader(layer_set, batch_size=jparams['test_batchSize'], shuffle=True)
 
     # for batch_idx, (data, targets) in enumerate(train_loader):
     #     data_average = torch.mean(torch.norm(data,dim=1))
@@ -358,15 +215,45 @@ if __name__ == '__main__':
         train_error = []
         test_error = []
 
+        # construct the layer-wise parameters
+        layer_names = []
+        for idx, (name, param) in enumerate(net.named_parameters()):
+            layer_names.append(name)
+            # print(f'{idx}: {name}')
+
+        parameters = []
+
+        for idx, name in enumerate(layer_names):
+
+            # update learning rate
+            if idx % 2 == 0:
+                lr_indx = int(idx / 2)
+                lr = jparams['lr'][lr_indx]
+
+            # append layer parameters
+            parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+                            'lr': lr}]
+
+        # construct the optimizer
+        # TODO changer optimizer to ADAM
+        if jparams['Optimizer'] == 'SGD':
+            optimizer = torch.optim.SGD(parameters, momentum=0.9)
+        elif jparams['Optimizer'] == 'Adam':
+            optimizer = torch.optim.Adam(parameters)
+
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150, 200], gamma=0.5)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.5)
+
         for epoch in tqdm(range(jparams['epochs'])):
 
-            train_error_epoch = train_bp(net, jparams, train_loader, epoch)
+            train_error_epoch = train_bp(net, jparams, train_loader, epoch, optimizer)
             train_error.append(train_error_epoch.item())
 
             # testing process
             test_error_epoch = test_bp(net, test_loader)
             test_error.append(test_error_epoch.item())
 
+            scheduler.step()
             DATAFRAME = updateDataframe(BASE_PATH, DATAFRAME, train_error, test_error)
             torch.save(net.state_dict(), BASE_PATH + prefix + 'model_state_dict.pt')
     # </editor-fold>
@@ -395,10 +282,42 @@ if __name__ == '__main__':
         # start = torch.cuda.Event(enable_timing=True)
         # end = torch.cuda.Event(enable_timing=True)
         # since = time.time()
+        # construct the layer-wise parameters
+        layer_names = []
+        for idx, (name, param) in enumerate(net.named_parameters()):
+            layer_names.append(name)
+            # print(f'{idx}: {name}')
+
+        parameters = []
+
+        for idx, name in enumerate(layer_names):
+
+            # parameter group name
+
+            # update learning rate
+            if idx % 2 == 0:
+                lr_indx = int(idx / 2)
+                lr = jparams['lr'][lr_indx]
+
+            # display info
+            # print(f'{idx}: lr = {lr:.6f}, {name}')
+
+            # append layer parameters
+            parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+                            'lr': lr}]
+
+        # construct the optimizer
+        # TODO changer optimizer to ADAM
+        if jparams['Optimizer'] == 'SGD':
+            optimizer = torch.optim.SGD(parameters)
+        elif jparams['Optimizer'] == 'Adam':
+            optimizer = torch.optim.Adam(parameters)
+
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=120, gamma=0.5)
 
         for epoch in tqdm(range(jparams['epochs'])):
             # train process
-            Xth = train_Xth(net, jparams, train_loader, epoch)
+            Xth = train_Xth(net, jparams, train_loader, epoch, optimizer)
 
             # classifying process
             response = classify(net, jparams, class_loader)
@@ -413,13 +332,7 @@ if __name__ == '__main__':
             X_th.append(torch.norm(Xth).item())
             Xth_dataframe = updateXthframe(BASE_PATH, Xth_dataframe, X_th)
 
-            # # create the model dossier
-            # if args.iterSave:
-            #     path_model = pathlib.Path(BASE_PATH + prefix + 'model')
-            #     path_model.mkdir(parents=True, exist_ok=True)
-            #     if epoch % 5 == 0:
-            #         torch.save(net.state_dict(), str(path_model) + prefix + 'model_state_dict_' + str(epoch/5) + '.pt')
-
+            scheduler.step()
             # at each epoch, we update the model parameters
             torch.save(net.state_dict(), BASE_PATH + prefix + 'model_state_dict.pt')
 
@@ -542,10 +455,8 @@ if __name__ == '__main__':
 
     # <editor-fold desc="Analyze a trained network">
     elif jparams['action'] == 'visu':
-
         # we re-load the trained network
-        # net.load_state_dict(torch.load(r'D:\Results_data\Visualization_BP_batchmode\784-1024-500\error0.0617\model_state_dict.pt'))
-        net.load_state_dict(torch.load(r'D:\Results_data\Visualization_BP_batchmode\perceptron-500-lr0.1795\error0.0676\model_state_dict.pt'))
+        net.load_state_dict(torch.load(args.trained_path + prefix +'model_state_dict.pt'))
 
         net.eval()
 
@@ -559,6 +470,9 @@ if __name__ == '__main__':
                                                            response=response, spike_record=1)
         print('the one2one av is :', test_error_av_epoch)
         print('the one2one max is :', test_error_max_epoch)
+        one2one_result = [test_error_av_epoch.cpu().numpy(), test_error_max_epoch.cpu().numpy()]
+        print(one2one_result)
+        np.savetxt(BASE_PATH + prefix + 'one2one.txt', one2one_result, delimiter=',')
 
         # we train the classification layer
         class_net = Classlayer(jparams)
@@ -582,9 +496,9 @@ if __name__ == '__main__':
             final_loss_error_list.append(final_loss_epoch.item())
             class_dataframe = updateDataframe(BASE_PATH, class_dataframe, class_train_error_list, final_test_error_list,
                                               filename='classification_layer.csv', loss=final_loss_error_list)
-
             # save the trained class_net
             torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict.pt')
+
     # </editor-fold>
 
     elif jparams['action'] =='visuEP':
@@ -621,7 +535,6 @@ if __name__ == '__main__':
                                                             response=response, spike_record=1)
         print('the one2one av is :', test_error_av_epoch)
         print('the one2one max is :', test_error_max_epoch)
-
 
     # <editor-fold desc="Print out spikes">
     if jparams['spike']:
