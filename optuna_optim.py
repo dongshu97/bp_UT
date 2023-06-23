@@ -112,7 +112,7 @@ with open('.'+prefix + 'optuna_config.json') as f:
 # exp_args = parser.parse_args()
 
 
-def returnMNIST(class_seed, batchSize, batchSizeTest=256):
+def returnMNIST(jparams):
 
     # TODO adapt the dataset to CNN
     print('We use the MNIST Dataset')
@@ -134,20 +134,33 @@ def returnMNIST(class_seed, batchSize, batchSizeTest=256):
     x = train_set.data
     y = train_set.targets
 
-    class_set = splitClass(x, y, 0.02, seed=class_seed,
+    class_set = splitClass(x, y, 0.02, seed=34,
                            transform=torchvision.transforms.Compose(transforms))
 
-    layer_set = splitClass(x, y, 0.02, seed=class_seed,
+    layer_set = splitClass(x, y, 0.02, seed=34,
                            transform=torchvision.transforms.Compose(transforms),
                            target_transform=ReshapeTransformTarget(10))
 
     # load the datasets
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=batchSize, shuffle=True)
-    test_loader = torch.utils.data.DataLoader(validation_set, batch_size=batchSizeTest, shuffle=True)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=jparams['batchSize'], shuffle=True)
+    test_loader = torch.utils.data.DataLoader(validation_set, batch_size=jparams['test_batchSize'], shuffle=True)
     class_loader = torch.utils.data.DataLoader(class_set, batch_size=1200, shuffle=True)
     layer_loader = torch.utils.data.DataLoader(layer_set, batch_size=1200, shuffle=True)
 
-    return train_loader, test_loader, class_loader, layer_loader
+    if jparams['littleData']:
+        targets = train_set.targets
+        semi_seed = 13
+        supervised_dataset, unsupervised_dataset = Semisupervised_dataset(train_set.data, targets,
+                                                                          jparams['fcLayers'][-1], jparams['n_class'],
+                                                                          jparams['trainLabel_number'], transform=torchvision.transforms.Compose(transforms),
+                                                                          seed=semi_seed)
+        supervised_loader = torch.utils.data.DataLoader(supervised_dataset, batch_size=jparams['pre_batchSize'],
+                                                        shuffle=True)
+        unsupervised_loader = torch.utils.data.DataLoader(unsupervised_dataset, batch_size=jparams['batchSize'],
+                                                          shuffle=True)
+        return train_loader, test_loader, class_loader, layer_loader, supervised_loader, unsupervised_loader
+    else:
+        return train_loader, test_loader, class_loader, layer_loader
 
 
 def returnYinYang(batchSize, batchSizeTest=128):
@@ -159,7 +172,6 @@ def returnYinYang(batchSize, batchSizeTest=128):
     layer_set = YinYangDataset(size=1000, seed=42, target_transform=ReshapeTransformTarget(3), sub_class=True)
 
     # test_set = YinYangDataset(size=1000, seed=40)
-
     # seperate the dataset
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=batchSize, shuffle=True)
     validation_loader = torch.utils.data.DataLoader(validation_set, batch_size=batchSizeTest, shuffle=False)
@@ -176,9 +188,10 @@ def jparamsCreate(pre_config, trial):
 
     # if jparams["dataset"] == 'mnist':
     #     jparams["class_seed"] = trial.suggest_int("class_seed", 0, 42)
-    jparams["class_seed"] = 34
-    if jparams["action"] == 'bp_Xth':
+    if jparams['littleData']:
+        jparams["pre_batchSize"] = trial.suggest_int("pre_batchSize", 10, min(jparams["trainLabel_number"], 512))
 
+    if jparams["action"] == 'bp_Xth':
         if jparams['Homeo_mode'] == 'batch':
             jparams["batchSize"] = trial.suggest_int("batchSize", 10, 256)
             jparams["eta"] = 0.5
@@ -212,29 +225,30 @@ def jparamsCreate(pre_config, trial):
 
 
     elif jparams["action"] == 'bp':
-
-        jparams["batchSize"] = trial.suggest_int("batchSize", 10, 256)
+        if jparams['littleData']:
+            jparams["batchSize"] = 16
+        else:
+            jparams["batchSize"] = trial.suggest_int("batchSize", 10, 256)
         jparams["eta"] = 0.5
         jparams["gamma"] = 0.5
-        jparams["nudge_N"] = None
+        jparams["nudge_N"] = 1
 
         lr = []
         for i in range(len(jparams["fcLayers"]) - 1):
-            lr_i = trial.suggest_float("lr" + str(i), 1e-3, 10, log=True)
+            lr_i = trial.suggest_float("lr" + str(i), 1e-9, 1, log=True)
             # to verify whether we need to change the name of lr_i
             lr.append(lr_i)
         jparams["lr"] = lr.copy()
         # jparams["lr"].reverse()
-
-        jparams["Optimizer"] = trial.suggest_categorical("Optimizer", ['SGD', 'Adam'])
-        jparams["lossFunction"] = trial.suggest_categorical("lossFunction", ['MSE', 'Cross-entropy'])
-
+        jparams["Optimizer"] = 'Adam'
+        #jparams["Optimizer"] = trial.suggest_categorical("Optimizer", ['SGD', 'Adam'])
         if jparams["Dropout"]:
-            dropProb = [0.2]
-            for i in range(len(jparams["fcLayers"]) - 1):
-                drop_i = trial.suggest_float("drop" + str(i), 0.01, 1, log=True)
-                # to verify whether we need to change the name of drop_i
-                dropProb.append(drop_i)
+            # dropProb = [0.2]
+            # for i in range(len(jparams["fcLayers"]) - 1):
+            #     drop_i = trial.suggest_float("drop" + str(i), 0.01, 1, log=True)
+            #     # to verify whether we need to change the name of drop_i
+            #     dropProb.append(drop_i)
+            dropProb = [0.2, 0.5, 0]
             jparams["dropProb"] = dropProb.copy()
             # jparams["dropProb"].reverse()
 
@@ -275,7 +289,8 @@ def jparamsCreate(pre_config, trial):
 
 
 
-def train_validation(jparams, net, trial, validation_loader, train_loader=None, class_loader=None, layer_loader=None, class_net=None):
+def train_validation(jparams, net, trial, validation_loader, optimizer, train_loader=None, class_loader=None, layer_loader=None,
+                     class_net=None, supervised_loader=None, unsupervised_loader=None):
     # train the model
 
     if jparams['action'] == 'bp':
@@ -285,7 +300,7 @@ def train_validation(jparams, net, trial, validation_loader, train_loader=None, 
             raise ValueError("training data is not given ")
 
         for epoch in tqdm(range(jparams['epochs'])):
-            train_error_epoch = train_bp(net, jparams, train_loader, epoch)
+            train_error_epoch = train_bp(net, jparams, train_loader, epoch, optimizer)
             validation_error_epoch = test_bp(net, validation_loader)
 
             # Handle pruning based on the intermediate value.
@@ -306,7 +321,7 @@ def train_validation(jparams, net, trial, validation_loader, train_loader=None, 
 
         for epoch in tqdm(range(jparams['epochs'])):
             # train process
-            Xth = train_Xth(net, jparams, train_loader, epoch)
+            Xth = train_Xth(net, jparams, train_loader, epoch, optimizer)
             # class process
             response = classify(net, jparams, class_loader)
             # test process
@@ -322,6 +337,7 @@ def train_validation(jparams, net, trial, validation_loader, train_loader=None, 
 
         return error_av_epoch
 
+    # TODO verify the class_layer part or remove it
     elif jparams['action'] == 'class_layer':
         if class_net is not None and layer_loader is not None:
             print("Training the model with unsupervised ep")
@@ -343,45 +359,6 @@ def train_validation(jparams, net, trial, validation_loader, train_loader=None, 
         return final_test_error_epoch
 
 
-# def train_validation_test(args, net, trial, train_loader, validation_loader, test_loader, classValidation_loader, classTest_loader):
-#
-#     # train the model
-#     if exp_args.action == 'bp':
-#         print("Training the model with supervised ep")
-#
-#         for epoch in tqdm(range(args.epochs)):
-#             train_error_epoch = train_bp(net, args, train_loader, epoch)
-#             validation_error_epoch = test_bp(net, args, validation_loader)
-#
-#             # Handle pruning based on the intermediate value.
-#             trial.report(validation_error_epoch, epoch)
-#             if trial.should_prune():
-#                 raise optuna.TrialPruned()
-#         test_error = test_bp(net, args, validation_loader)
-#         return test_error
-#
-#     elif args.action == 'bp_Xth':
-#         print("Training the model with unsupervised ep")
-#
-#         for epoch in tqdm(range(args.epochs)):
-#             # train process
-#             Xth = train_Xth(net, args, train_loader, epoch)
-#             # class process
-#             response = classify(net, args, classValidation_loader)
-#             # test process
-#             error_av_epoch, error_max_epoch = test_Xth(net, args, validation_loader, response=response,
-#                                                                  spike_record=0)
-#
-#             # Handle pruning based on the intermediate value.
-#             trial.report(error_av_epoch, epoch)
-#             if trial.should_prune():
-#                 raise optuna.TrialPruned()
-#
-#         response = classify(net, args, classValidation_loader)
-#         error_av, error_max = test_Xth(net, args, validation_loader, response=response,
-#                                                                  spike_record=0)
-#         return error_av
-
 def objective(trial, pre_config):
 
     # design the hyperparameters to be optimized
@@ -392,11 +369,38 @@ def objective(trial, pre_config):
         train_loader, validation_loader,  class_loader, layer_loader =\
             returnYinYang(jparams['batchSize'], batchSizeTest=jparams["test_batchSize"])
     elif jparams["dataset"] == 'mnist':
-        train_loader,  validation_loader, class_loader, layer_loader =\
-            returnMNIST(jparams["class_seed"], jparams["batchSize"], batchSizeTest=jparams["test_batchSize"])
+        if jparams['littleData']:
+            train_loader, validation_loader, class_loader, layer_loader, \
+            supervised_loader, unsupervised_loader = returnMNIST(jparams)
+        else:
+            train_loader,  validation_loader, class_loader, layer_loader = returnMNIST(jparams)
 
     # create the model
     net = Net(jparams)
+
+    # define the optimizer
+    layer_names = []
+    for idx, (name, param) in enumerate(net.named_parameters()):
+        layer_names.append(name)
+    parameters = []
+    for idx, name in enumerate(layer_names):
+        # update learning rate
+        if idx % 2 == 0:
+            lr_indx = int(idx / 2)
+            if jparams['action'] == 'semi-supervised':
+                lr = jparams['pre_lr'][lr_indx]
+            else:
+                lr = jparams['lr'][lr_indx]
+        # append layer parameters
+        parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+                        'lr': lr}]
+
+    # construct the optimizer
+    # TODO changer optimizer to ADAM
+    if jparams['Optimizer'] == 'SGD':
+        optimizer = torch.optim.SGD(parameters, momentum=0.9)
+    elif jparams['Optimizer'] == 'Adam':
+        optimizer = torch.optim.Adam(parameters)
 
     # load the trained unsupervised network when we train classification layer
     if jparams["action"] == 'class_layer':
@@ -407,13 +411,16 @@ def objective(trial, pre_config):
         # create the new class_net
         class_net = Classlayer(jparams)
 
-        final_err = train_validation(jparams, net, trial, validation_loader, layer_loader=layer_loader, class_net=class_net)
+        final_err = train_validation(jparams, net, trial, validation_loader, optimizer, layer_loader=layer_loader, class_net=class_net)
 
     elif jparams["action"] == 'bp_Xth':
-        final_err = train_validation(jparams, net, trial, validation_loader, train_loader=train_loader, class_loader=class_loader)
+        final_err = train_validation(jparams, net, trial, validation_loader, optimizer, train_loader=train_loader, class_loader=class_loader)
 
     elif jparams["action"] == 'bp':
-        final_err = train_validation(jparams, net, trial, validation_loader, train_loader=train_loader)
+        if jparams["littleData"]:
+            final_err = train_validation(jparams, net, trial, validation_loader, optimizer, train_loader=supervised_loader)
+        else:
+            final_err = train_validation(jparams, net, trial, validation_loader, optimizer, train_loader=train_loader)
 
     del(jparams)
 
@@ -578,25 +585,25 @@ if __name__=='__main__':
 
     study.enqueue_trial(
         {
-            "batchSize": 32,
-            "gamma": 0.3,
-            "nudge_N": 5,
-            "lr0":  5.4,
-            "lr1": 4,
+            "pre_batchSize": 32,
+            #"gamma": 0.3,
+            #"nudge_N": 5,
+            "lr0":  0.0008,
+            "lr1": 0.0001,
         }
     )
 
     study.enqueue_trial(
         {
-            "batchSize": 64,
-            "gamma": 0.5,
-            "nudge_N": 5,
-            "lr0":  5.4,
-            "lr1": 5,
+            "pre_batchSize": 16,
+            #"gamma": 0.5,
+            #"nudge_N": 5,
+            "lr0":  0.0001,
+            "lr1": 0.00006,
         }
     )
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
-    study.optimize(lambda trial: objective(trial, pre_config), n_trials=100)
+    study.optimize(lambda trial: objective(trial, pre_config), n_trials=200)
     trails = study.get_trials()
     # record trials
     df = study.trials_dataframe()

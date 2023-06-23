@@ -209,7 +209,7 @@ def classify_network(net, class_net, jparams, layer_loader):
     return train_error
 
 
-def train_Xth(net, jparams, train_loader, epoch, supervised_response=None):
+def train_Xth(net, jparams, train_loader, epoch, optimizer, supervised_response=None):
 
     net.train()
     net.epoch = epoch + 1
@@ -221,37 +221,37 @@ def train_Xth(net, jparams, train_loader, epoch, supervised_response=None):
         criterion = torch.nn.CrossEntropyLoss()
 
     Xth = torch.zeros(jparams['fcLayers'][-1], device=net.device)
-    # construct the layer-wise parameters
-    layer_names = []
-    for idx, (name, param) in enumerate(net.named_parameters()):
-        layer_names.append(name)
-        # print(f'{idx}: {name}')
-
-    parameters = []
-    # prev_group_name = layer_names[0].split('.')[0] + '.' + layer_names[0].split('.')[1]
-
-    for idx, name in enumerate(layer_names):
-
-        # parameter group name
-        # cur_group_name = name.split('.')[0] + '.' + name.split('.')[1]
-
-        # update learning rate
-        if idx % 2 == 0:
-            lr_indx = int(idx / 2)
-            lr = jparams['lr'][lr_indx]
-
-        # display info
-        # print(f'{idx}: lr = {lr:.6f}, {name}')
-
-        # append layer parameters
-        parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
-                        'lr': lr}]
-
-    # construct the optimizer
-    if jparams['Optimizer'] == 'SGD':
-        optimizer = torch.optim.SGD(parameters)
-    elif jparams['Optimizer'] == 'Adam':
-        optimizer = torch.optim.Adam(parameters)
+    # # construct the layer-wise parameters
+    # layer_names = []
+    # for idx, (name, param) in enumerate(net.named_parameters()):
+    #     layer_names.append(name)
+    #     # print(f'{idx}: {name}')
+    #
+    # parameters = []
+    # # prev_group_name = layer_names[0].split('.')[0] + '.' + layer_names[0].split('.')[1]
+    #
+    # for idx, name in enumerate(layer_names):
+    #
+    #     # parameter group name
+    #     # cur_group_name = name.split('.')[0] + '.' + name.split('.')[1]
+    #
+    #     # update learning rate
+    #     if idx % 2 == 0:
+    #         lr_indx = int(idx / 2)
+    #         lr = jparams['lr'][lr_indx]
+    #
+    #     # display info
+    #     # print(f'{idx}: lr = {lr:.6f}, {name}')
+    #
+    #     # append layer parameters
+    #     parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+    #                     'lr': lr}]
+    #
+    # # construct the optimizer
+    # if jparams['Optimizer'] == 'SGD':
+    #     optimizer = torch.optim.SGD(parameters)
+    # elif jparams['Optimizer'] == 'Adam':
+    #     optimizer = torch.optim.Adam(parameters)
 
     # Stochastic mode
     if jparams['batchSize'] == 1:
@@ -311,7 +311,7 @@ def train_Xth(net, jparams, train_loader, epoch, supervised_response=None):
     return Xth
 
 
-def train_bp(net, jparams, train_loader, epoch):
+def train_bp(net, jparams, train_loader, epoch, optimizer):
 
     net.train()
     net.epoch = epoch+1
@@ -322,39 +322,39 @@ def train_bp(net, jparams, train_loader, epoch):
     elif jparams['lossFunction'] == 'Cross-entropy':
         criterion = torch.nn.CrossEntropyLoss()
 
-    # construct the layer-wise parameters
-    layer_names = []
-    for idx, (name, param) in enumerate(net.named_parameters()):
-        layer_names.append(name)
-        #print(f'{idx}: {name}')
-
-    parameters = []
-    #prev_group_name = layer_names[0].split('.')[0] + '.' + layer_names[0].split('.')[1]
-
-    for idx, name in enumerate(layer_names):
-
-        # parameter group name
-        #cur_group_name = name.split('.')[0] + '.' + name.split('.')[1]
-
-        # update learning rate
-        if idx % 2 == 0:
-            lr_indx = int(idx/2)
-            lr = jparams['lr'][lr_indx]
-
-        # display info
-        #print(f'{idx}: lr = {lr:.6f}, {name}')
-
-        # append layer parameters
-        parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
-                        'lr': lr}]
-
-    # construct the optimizer
-    # TODO changer optimizer to ADAM
-    if jparams['Optimizer'] == 'SGD':
-        optimizer = torch.optim.SGD(parameters, momentum=0.9)
-    elif jparams['Optimizer'] == 'Adam':
-        optimizer = torch.optim.Adam(parameters)
-    #optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+    # # construct the layer-wise parameters
+    # layer_names = []
+    # for idx, (name, param) in enumerate(net.named_parameters()):
+    #     layer_names.append(name)
+    #     #print(f'{idx}: {name}')
+    #
+    # parameters = []
+    # #prev_group_name = layer_names[0].split('.')[0] + '.' + layer_names[0].split('.')[1]
+    #
+    # for idx, name in enumerate(layer_names):
+    #
+    #     # parameter group name
+    #     #cur_group_name = name.split('.')[0] + '.' + name.split('.')[1]
+    #
+    #     # update learning rate
+    #     if idx % 2 == 0:
+    #         lr_indx = int(idx/2)
+    #         lr = jparams['lr'][lr_indx]
+    #
+    #     # display info
+    #     #print(f'{idx}: lr = {lr:.6f}, {name}')
+    #
+    #     # append layer parameters
+    #     parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+    #                     'lr': lr}]
+    #
+    # # construct the optimizer
+    # # TODO changer optimizer to ADAM
+    # if jparams['Optimizer'] == 'SGD':
+    #     optimizer = torch.optim.SGD(parameters, momentum=0.9)
+    # elif jparams['Optimizer'] == 'Adam':
+    #     optimizer = torch.optim.Adam(parameters)
+    # #optimizer = torch.optim.Adam(net.parameters(), lr=lr)
 
     # construct the scheduler
     # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
@@ -381,6 +381,8 @@ def train_bp(net, jparams, train_loader, epoch):
 
         # forward propagation
         output = net(data.to(torch.float32))
+        # label smoothing
+        targets = net.smoothLabels(targets.to(torch.float32), 0.2, 1)
 
         loss = criterion(output, targets.to(torch.float32))
 
@@ -551,7 +553,6 @@ def test_unsupervised_layer(net, class_net, jparams, test_loader):
 
     return test_error, loss_test
 
-
 def initDataframe(path, method='bp', dataframe_to_init='results.csv'):
     '''
     Initialize a dataframe with Pandas so that parameters are saved
@@ -568,6 +569,8 @@ def initDataframe(path, method='bp', dataframe_to_init='results.csv'):
             columns_header = ['Train_Error', 'Min_Train_Error', 'Test_Error', 'Min_Test_Error']
         elif method == 'bp_Xth':
             columns_header = ['One2one_av_Error', 'Min_One2one_av', 'One2one_max_Error', 'Min_One2one_max_Error']
+        elif method == 'semi-supervised':
+            columns_header= ['Supervised_Test_Error', 'Min_Supervised_Test_Error', 'Entire_Test_Error', 'Min_Entire_Test_Error']
         elif method == 'classification_layer':
             columns_header = ['Train_Class_Error', 'Min_Train_Class_Error', 'Final_Test_Error', 'Min_Final_Test_Error',
                               'Final_Test_Loss', 'Min_Final_Test_Loss']

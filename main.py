@@ -80,12 +80,30 @@ if jparams['dataset'] == 'mnist':
 
         train_loader = torch.utils.data.DataLoader(train_set, batch_size=jparams['batchSize'], shuffle=True)
 
+    elif jparams['action'] == 'semi-supervised' or jparams['splitData'] == 1:
+        train_set = torchvision.datasets.MNIST(root='./data', train=True, download=True,
+                                               transform=torchvision.transforms.Compose(transforms),
+                                               target_transform=ReshapeTransformTarget(10))
+        targets = train_set.targets
+        semi_seed = 13
+
+        # seperate the supervised and unsupervised dataset
+        supervised_dataset, unsupervised_dataset = Semisupervised_dataset(train_set.data, targets,
+                                                                          jparams['fcLayers'][-1], jparams['n_class'],
+                                                                          jparams['trainLabel_number'],
+                                                                          transform=torchvision.transforms.Compose(
+                                                                              transforms),
+                                                                          seed=semi_seed)
+        supervised_loader = torch.utils.data.DataLoader(supervised_dataset, batch_size=jparams['pre_batchSize'],
+                                                        shuffle=True)
+        unsupervised_loader = torch.utils.data.DataLoader(unsupervised_dataset, batch_size=jparams['batchSize'],
+                                                          shuffle=True)
+
     # Load the dataset
     # TODO change the target (do not use the ReshapeTransformTarget)
 
     test_set = torchvision.datasets.MNIST(root='./data', train=False, download=True,
                                           transform=torchvision.transforms.Compose(transforms))
-
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=jparams['test_batchSize'], shuffle=True)
 
     # define the class dataset
@@ -108,9 +126,6 @@ if jparams['dataset'] == 'mnist':
         layer_set = splitClass(x, y, classLabel_percentage, seed=seed,
                                transform=torchvision.transforms.Compose(transforms),
                                target_transform=ReshapeTransformTarget(10))
-
-    # class_set = ClassDataset(root='./MNIST_class_seed', test_set=test_set, seed=seed,
-    #                          transform=torchvision.transforms.Compose(transforms))
 
     class_loader = torch.utils.data.DataLoader(class_set, batch_size=jparams['test_batchSize'], shuffle=True)
     layer_loader = torch.utils.data.DataLoader(layer_set, batch_size=jparams['test_batchSize'], shuffle=True)
@@ -138,12 +153,12 @@ elif jparams['dataset'] == 'cifar10':
                                            download=True, transform=transform_type,
                                             target_transform=ReshapeTransformTarget(10))
     seed = 1
-    # TODO we may not use the target_transform to simply the calculation in unsupervised learning
+    # TODO define the class dataset for CIFAR10
     test_set.targets = np.array(test_set.targets)
 
-    class_set = ClassDataset(root='./CIFAR_class_seed', test_set=test_set, seed=seed,
-                             transform=transform_type,
-                             target_transform=ReshapeTransformTarget(10))
+    # class_set = ClassDataset(root='./CIFAR_class_seed', test_set=test_set, seed=seed,
+    #                          transform=transform_type,
+    #                          target_transform=ReshapeTransformTarget(10))
 
     classes = ('plane', 'car', 'bird', 'cat',
                'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
@@ -151,7 +166,7 @@ elif jparams['dataset'] == 'cifar10':
     # load the datasets
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=jparams['batchSize'], shuffle=True)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=jparams['test_batchSize'], shuffle=True)
-    class_loader = torch.utils.data.DataLoader(class_set, batch_size=1000, shuffle=True)
+    # class_loader = torch.utils.data.DataLoader(class_set, batch_size=1000, shuffle=True)
 
 elif jparams['dataset'] == 'YinYang':
     print('We use the YinYang dataset')
@@ -204,32 +219,20 @@ if __name__ == '__main__':
     with open(BASE_PATH + prefix + "config.json", "w") as outfile:
         json.dump(jparams, outfile)
 
-    # <editor-fold desc="Train with supervised BP">
-    if jparams['action'] == 'bp':
-
-        print("Training the network with supervised bp")
-        #saveHyperparameters(args, net, BASE_PATH)
-        DATAFRAME = initDataframe(BASE_PATH, method='bp')
-        print(DATAFRAME)
-
-        train_error = []
-        test_error = []
-
+    # define Optimizer
         # construct the layer-wise parameters
         layer_names = []
         for idx, (name, param) in enumerate(net.named_parameters()):
             layer_names.append(name)
-            # print(f'{idx}: {name}')
-
         parameters = []
-
         for idx, name in enumerate(layer_names):
-
             # update learning rate
             if idx % 2 == 0:
                 lr_indx = int(idx / 2)
-                lr = jparams['lr'][lr_indx]
-
+                if jparams['action'] == 'semi-supervised':
+                    lr = jparams['pre_lr'][lr_indx]
+                else:
+                    lr = jparams['lr'][lr_indx]
             # append layer parameters
             parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
                             'lr': lr}]
@@ -241,19 +244,32 @@ if __name__ == '__main__':
         elif jparams['Optimizer'] == 'Adam':
             optimizer = torch.optim.Adam(parameters)
 
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150, 200], gamma=0.5)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.5)
+    # <editor-fold desc="Train with supervised BP">
+    if jparams['action'] == 'bp':
+
+        print("Training the network with supervised bp")
+        #saveHyperparameters(args, net, BASE_PATH)
+        DATAFRAME = initDataframe(BASE_PATH, method='bp')
+        print(DATAFRAME)
+
+        train_error = []
+        test_error = []
+
+        # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150, 200], gamma=0.5)
+        # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.5)
 
         for epoch in tqdm(range(jparams['epochs'])):
-
-            train_error_epoch = train_bp(net, jparams, train_loader, epoch, optimizer)
+            if jparams['splitData']:
+                train_error_epoch = train_bp(net, jparams, supervised_loader, epoch, optimizer)
+            else:
+                train_error_epoch = train_bp(net, jparams, train_loader, epoch, optimizer)
             train_error.append(train_error_epoch.item())
 
             # testing process
             test_error_epoch = test_bp(net, test_loader)
             test_error.append(test_error_epoch.item())
-
-            scheduler.step()
+            #
+            # scheduler.step()
             DATAFRAME = updateDataframe(BASE_PATH, DATAFRAME, train_error, test_error)
             torch.save(net.state_dict(), BASE_PATH + prefix + 'model_state_dict.pt')
     # </editor-fold>
@@ -282,38 +298,8 @@ if __name__ == '__main__':
         # start = torch.cuda.Event(enable_timing=True)
         # end = torch.cuda.Event(enable_timing=True)
         # since = time.time()
-        # construct the layer-wise parameters
-        layer_names = []
-        for idx, (name, param) in enumerate(net.named_parameters()):
-            layer_names.append(name)
-            # print(f'{idx}: {name}')
 
-        parameters = []
-
-        for idx, name in enumerate(layer_names):
-
-            # parameter group name
-
-            # update learning rate
-            if idx % 2 == 0:
-                lr_indx = int(idx / 2)
-                lr = jparams['lr'][lr_indx]
-
-            # display info
-            # print(f'{idx}: lr = {lr:.6f}, {name}')
-
-            # append layer parameters
-            parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
-                            'lr': lr}]
-
-        # construct the optimizer
-        # TODO changer optimizer to ADAM
-        if jparams['Optimizer'] == 'SGD':
-            optimizer = torch.optim.SGD(parameters)
-        elif jparams['Optimizer'] == 'Adam':
-            optimizer = torch.optim.Adam(parameters)
-
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=120, gamma=0.5)
+        # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=120, gamma=0.5)
 
         for epoch in tqdm(range(jparams['epochs'])):
             # train process
@@ -332,7 +318,7 @@ if __name__ == '__main__':
             X_th.append(torch.norm(Xth).item())
             Xth_dataframe = updateXthframe(BASE_PATH, Xth_dataframe, X_th)
 
-            scheduler.step()
+            # scheduler.step()
             # at each epoch, we update the model parameters
             torch.save(net.state_dict(), BASE_PATH + prefix + 'model_state_dict.pt')
 
@@ -367,6 +353,75 @@ if __name__ == '__main__':
         #     time_elapsed // 60, time_elapsed % 60))
 
     # </editor-fold>
+    elif jparams['action'] == 'semi-supervised':
+        print("Training the model with semi-supervised learning")
+
+        # save the initial network
+        torch.save(net.state_dict(), BASE_PATH + prefix + 'model_pre_supervised_state_dict0.pt')
+
+        # init Dataframe
+        PretrainFrame = initDataframe(BASE_PATH, method='supervised', dataframe_to_init='pre_supervised.csv')
+
+        pretrain_error_list = []
+        pretest_error_list = []
+
+        # construct the layer-wise parameters
+        supervised_optimizer = optimizer
+        del(optimizer)
+
+        for epoch in tqdm(range(jparams['pre_epochs'])):
+            pretrain_error_epoch = train_bp(net, jparams, supervised_loader, epoch, supervised_optimizer)
+            pretrain_error_list.append(pretrain_error_epoch.item())
+            # testing process
+            pretest_error_epoch = test_bp(net, test_loader)
+            pretest_error_list.append(pretest_error_epoch.item())
+
+            PretrainFrame = updateDataframe(BASE_PATH, PretrainFrame, pretrain_error_list, pretest_error_list, 'pre_supervised.csv')
+            # save the entire model
+            torch.save(net.state_dict(), BASE_PATH + prefix + 'model_pre_supervised_state_dict.pt')
+
+
+        SEMIFRAME = initDataframe(BASE_PATH, method='semi-supervised', dataframe_to_init='semi-supervised.csv')
+
+        supervised_test_error_list = []
+        entire_test_error_list = []
+
+        # define unsupervised optimizer
+        layer_names = []
+        for idx, (name, param) in enumerate(net.named_parameters()):
+            layer_names.append(name)
+            # print(f'{idx}: {name}')
+        parameters = []
+        for idx, name in enumerate(layer_names):
+            # update learning rate
+            if idx % 2 == 0:
+                lr_indx = int(idx / 2)
+                lr = jparams['lr'][lr_indx]
+            # append layer parameters
+            parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+                            'lr': lr}]
+
+        # construct the optimizer
+        # TODO changer optimizer to ADAM
+        if jparams['Optimizer'] == 'SGD':
+            unsupervised_optimizer = torch.optim.SGD(parameters)
+        elif jparams['Optimizer'] == 'Adam':
+            unsupervised_optimizer = torch.optim.Adam(parameters)
+
+        for epoch in tqdm(range(jparams['epochs'])):
+            # supervised reminder
+            pretrain_error_epoch = train_bp(net, jparams, supervised_loader, epoch, unsupervised_optimizer)
+            supervised_test_epoch = test_bp(net, test_loader)
+            supervised_test_error_list.append(supervised_test_epoch.item())
+            # unsupervised training
+            Xth = train_Xth(net, jparams, unsupervised_loader, epoch, unsupervised_optimizer)
+            entire_test_epoch = test_bp(net, test_loader)
+            entire_test_error_list.append(entire_test_epoch.item())
+
+            SEMIFRAME = updateDataframe(BASE_PATH, SEMIFRAME, supervised_test_error_list, entire_test_error_list, 'semi-supervised.csv')
+            # save the entire model
+            torch.save(net.state_dict(), BASE_PATH + prefix + 'model_semi_state_dict.pt')
+
 
     # <editor-fold desc="Test a training methods with little dataset">
     elif jparams['action'] == 'test':
@@ -402,7 +457,6 @@ if __name__ == '__main__':
         for i in range(iterations):
 
             image, target = next(train_iterator)
-
             targets_record.append(target)
 
             if net.cuda:
@@ -412,7 +466,6 @@ if __name__ == '__main__':
 
             # forward propagation
             output = net(jparams, image.to(torch.float32))
-
             unsupervised_targets = torch.zeros(output.size(), device=net.device)
             unsupervised_targets.scatter_(1, torch.topk(output.detach() - Xth, jparams['nudge_N']).indices,
                                           torch.ones(output.size(), device=net.device))

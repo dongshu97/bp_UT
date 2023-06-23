@@ -4,6 +4,7 @@ import os
 from torch.utils.data import Dataset
 from PIL import Image
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MultiLabelBinarizer
 
 
 class ReshapeTransform:
@@ -25,22 +26,24 @@ class ReshapeTransformTarget:
         return target_onehot.scatter_(1, target.long(), 1).squeeze(0)
 
 
-class DigitsDataset(Dataset):
-    def __init__(self, images, labels=None, transforms=None, target_transforms=None):
+class myDataset(Dataset):
+    def __init__(self, images, labels, transform=None, target_transform=None):
         self.x = images
         self.y = labels
-        self.transforms = transforms
-        self.target_transforms = target_transforms
+        self.transform = transform
+        self.target_transform = target_transform
 
     def __getitem__(self, i):
-        data = self.x[i, :]
+        data = self.x[i, :].numpy()
         target = self.y[i]
+        # data, label = self.data[item].numpy(), self.targets[item]
+        data = Image.fromarray(data)
 
-        if self.transforms:
-            data = self.transforms(data)
+        if self.transform:
+            data = self.transform(data)
 
-        if self.target_transforms:
-            target = self.target_transforms(target)
+        if self.target_transform:
+            target = self.target_transform(target)
 
         if self.y is not None:
             return (data, target)
@@ -60,8 +63,8 @@ class YinYangDataset(Dataset):
         self.target_transform = target_transform
         self.r_small = r_small
         self.r_big = r_big
-        self.__vals = [] # private data
-        self.__cs = []
+        self.vals = [] # private data
+        self.cs = []
         self.class_names = ['yin', 'yang', 'dot']
         for i in range(size):
             # keep num of class instances balanced by using rejection sampling
@@ -72,14 +75,14 @@ class YinYangDataset(Dataset):
             x_flipped = 1. - x
             y_flipped = 1. - y
             val = np.array([x, y, x_flipped, y_flipped])
-            self.__vals.append(val)
-            self.__cs.append(c)
+            self.vals.append(val)
+            self.cs.append(c)
         if sub_class:
             class_data, remain_data, \
-            class_target, remain_target = train_test_split(self.__vals, self.__cs, test_size=0.9,
-                                                           random_state=seed, stratify=self.__cs)
-            self.__vals = class_data
-            self.__cs = class_target
+            class_target, remain_target = train_test_split(self.vals, self.cs, test_size=0.9,
+                                                           random_state=seed, stratify=self.cs)
+            self.vals = class_data
+            self.cs = class_target
 
     def get_sample(self, goal=None):
         # sample until goal is satisfied
@@ -118,9 +121,9 @@ class YinYangDataset(Dataset):
         return np.sqrt((x - 0.5 * self.r_big)**2 + (y - self.r_big)**2)
 
     def __getitem__(self, index):
-        data = self.__vals[index].copy()
-        target = self.__cs[index]
-        #sample = (self.__vals[index].copy(), self.__cs[index])
+        data = self.vals[index].copy()
+        target = self.cs[index]
+        #sample = (self.vals[index].copy(), self.cs[index])
         if self.transform:
             data = self.transform(data)
         if self.target_transform:
@@ -131,7 +134,7 @@ class YinYangDataset(Dataset):
         return sample
 
     def __len__(self):
-        return len(self.__cs)
+        return len(self.cs)
 
 
 class splitClass(Dataset):
@@ -160,112 +163,108 @@ class splitClass(Dataset):
         return len(self.targets)
 
 
-def UnlabelDataset(train_set, root, unlabeledPercent, Seed):
-    seedfile = str(unlabeledPercent*100) + '%' + 'unsupervised_indice' + 'Seed' + str(Seed) + '.txt'
-    filePath = os.path.join(root, seedfile)
-    images_indices = np.loadtxt(filePath).astype(int)
-    train_set.targets[images_indices] = -1
-    return train_set
+# class ClassDataset(Dataset):
+#     def __init__(self, root, test_set, seed, transform=None, target_transform=None):
+#
+#         seedfile = 'seed' + str(seed) + '.txt'
+#         filePath = os.path.join(root, seedfile)
+#         images_indices = np.loadtxt(filePath).astype(int)
+#         self.data = test_set.data[images_indices, :]
+#         self.transform = transform
+#         self.targets = np.array(test_set.targets)[images_indices]
+#         self.target_transform = target_transform
+#
+#     def __getitem__(self, item):
+#         img, label = self.data[item].numpy(), self.targets[item]
+#         img = Image.fromarray(img)
+#         if self.transform is not None:
+#             img = self.transform(img)
+#         if self.target_transform is not None:
+#             label = self.target_transform(label)
+#         return img, label
+#
+#     def __len__(self):
+#         return len(self.targets)
 
 
-class subMNISTDataset(Dataset):
-    def __init__(self, root, train_set, unlabeledPercent, Seed, transform=None, target_transform=None):
+def generate_N_targets_label(targets, number_per_class, output_neurons):
+    multi_targets = list(map(lambda x: np.asarray(range(number_per_class*x, number_per_class*(x+1))), targets))
+    mlb = MultiLabelBinarizer(classes=range(output_neurons))
+    N_targets = mlb.fit_transform(multi_targets)
 
-        seedfile = str(unlabeledPercent * 100) + '%' + 'unsupervised_indice' + 'Seed' + str(Seed) + '.txt'
-        filePath = os.path.join(root, seedfile)
-        del_indices = np.loadtxt(filePath).astype(int).tolist()
-        total_indices = np.arange(len(train_set.targets))
-        images_indices = np.delete(total_indices, del_indices)
-
-        self.data = train_set.data[images_indices, :]
-        self.transform = transform
-        self.targets = np.array(train_set.targets)[images_indices]
-        self.target_transform = target_transform
-
-    def __getitem__(self, item):
-        img, label = self.data[item].numpy(), self.targets[item]
-        img = Image.fromarray(img)
-        if self.transform is not None:
-            img = self.transform(img)
-        if self.target_transform is not None:
-            label = self.target_transform(label)
-        return img, label
-
-    def __len__(self):
-        return len(self.targets)
+    return torch.from_numpy(N_targets)
 
 
+def Semisupervised_dataset(train_set, targets, output_neurons, n_class, labeled_number, transform, seed=1):
 
-class ClassDataset(Dataset):
-    def __init__(self, root, test_set, seed, transform=None, target_transform=None):
+    fraction = labeled_number/len(targets)
+    # we split the dataset for supervised training and unsupervised training
+    X_super, X_unsuper, Y_super, Y_unsuper = train_test_split(train_set, targets, test_size=1 - fraction,
+                                                              train_size=fraction, random_state=seed,
+                                                              stratify=targets)
+    number_per_class = int(output_neurons/n_class)
 
-        seedfile = 'seed' + str(seed) + '.txt'
-        filePath = os.path.join(root, seedfile)
-        images_indices = np.loadtxt(filePath).astype(int)
-        self.data = test_set.data[images_indices, :]
-        self.transform = transform
-        self.targets = np.array(test_set.targets)[images_indices]
-        self.target_transform = target_transform
+    # we define the target of supervised learning considering the number of output neurons
+    if number_per_class > 1:
+        N_Y_super = generate_N_targets_label(Y_super, number_per_class, output_neurons)
+    else:
+        N_Y_super = torch.nn.functional.one_hot(Y_super, num_classes=-1)
 
-    def __getitem__(self, item):
-        img, label = self.data[item].numpy(), self.targets[item]
-        img = Image.fromarray(img)
-        if self.transform is not None:
-            img = self.transform(img)
-        if self.target_transform is not None:
-            label = self.target_transform(label)
-        return img, label
+    # we load the target
+    dataset_super = myDataset(X_super, N_Y_super, transform=transform, target_transform=None)
+    dataset_unsuper = myDataset(X_unsuper, Y_unsuper, transform=transform, target_transform=None) # no one-hot coding
+    # dataset_super = torch.utils.data.TensorDataset(transform(X_super), N_Y_super)
+    # dataset_unsuper = torch.utils.data.TensorDataset(transform(X_unsuper), Y_unsuper) # no one-hot coding
 
-    def __len__(self):
-        return len(self.targets)
-
-
-class ValidationDataset(Dataset):
-    # This dataset is only used for hyperparameter research
-    def __init__(self, root, rest_set, seed, transform=None, target_transform=None):
-        seedfile = 'validSeed' + str(seed) + '.txt'
-        filePath = os.path.join(root, seedfile)
-        images_indices = np.loadtxt(filePath).astype(int)
-        self.data = rest_set.data[images_indices, :]
-        self.transform = transform
-        self.targets = rest_set.targets[images_indices]
-        self.target_transform = target_transform
-
-    def __getitem__(self, item):
-        img, label = self.data[item].numpy(), self.targets[item].numpy()
-        img = Image.fromarray(img)
-        if self.transform is not None:
-            img = self.transform(img)
-        if self.target_transform is not None:
-            label = self.target_transform(label)
-        return img, label
-
-    def __len__(self):
-        return len(self.targets)
+    return dataset_super, dataset_unsuper
 
 
-class HypertestDataset(Dataset):
-    # This dataset is only used for hyperparameter research
-    def __init__(self, root, rest_set, seed, transform=None, target_transform=None):
-
-        seedfile = 'validSeed' + str(seed) + '.txt'
-        filePath = os.path.join(root, seedfile)
-        delete_indices = np.loadtxt(filePath).astype(int).tolist()
-        total_indices = np.arange(len(rest_set.targets))
-        images_indices = np.delete(total_indices, delete_indices)
-        self.data = rest_set.data[images_indices, :]
-        self.transform = transform
-        self.targets = rest_set.targets[images_indices]
-        self.target_transform = target_transform
-
-    def __getitem__(self, item):
-        img, label = self.data[item].numpy(), self.targets[item].numpy()
-        img = Image.fromarray(img)
-        if self.transform is not None:
-            img = self.transform(img)
-        if self.target_transform is not None:
-            label = self.target_transform(label)
-        return img, label
-
-    def __len__(self):
-        return len(self.targets)
+# class ValidationDataset(Dataset):
+#     # This dataset is only used for hyperparameter research
+#     def __init__(self, root, rest_set, seed, transform=None, target_transform=None):
+#         seedfile = 'validSeed' + str(seed) + '.txt'
+#         filePath = os.path.join(root, seedfile)
+#         images_indices = np.loadtxt(filePath).astype(int)
+#         self.data = rest_set.data[images_indices, :]
+#         self.transform = transform
+#         self.targets = rest_set.targets[images_indices]
+#         self.target_transform = target_transform
+#
+#     def __getitem__(self, item):
+#         img, label = self.data[item].numpy(), self.targets[item].numpy()
+#         img = Image.fromarray(img)
+#         if self.transform is not None:
+#             img = self.transform(img)
+#         if self.target_transform is not None:
+#             label = self.target_transform(label)
+#         return img, label
+#
+#     def __len__(self):
+#         return len(self.targets)
+#
+#
+# class HypertestDataset(Dataset):
+#     # This dataset is only used for hyperparameter research
+#     def __init__(self, root, rest_set, seed, transform=None, target_transform=None):
+#
+#         seedfile = 'validSeed' + str(seed) + '.txt'
+#         filePath = os.path.join(root, seedfile)
+#         delete_indices = np.loadtxt(filePath).astype(int).tolist()
+#         total_indices = np.arange(len(rest_set.targets))
+#         images_indices = np.delete(total_indices, delete_indices)
+#         self.data = rest_set.data[images_indices, :]
+#         self.transform = transform
+#         self.targets = rest_set.targets[images_indices]
+#         self.target_transform = target_transform
+#
+#     def __getitem__(self, item):
+#         img, label = self.data[item].numpy(), self.targets[item].numpy()
+#         img = Image.fromarray(img)
+#         if self.transform is not None:
+#             img = self.transform(img)
+#         if self.target_transform is not None:
+#             label = self.target_transform(label)
+#         return img, label
+#
+#     def __len__(self):
+#         return len(self.targets)
