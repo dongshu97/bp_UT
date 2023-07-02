@@ -26,14 +26,14 @@ parser.add_argument(
     '--json_path',
     type=str,
     default=r'.',
-    # default=r'D:\Results_data\BP_perceptron_without_dropout\784-100',
+    #default=r'D:\Results_data\BP_perceptron_without_dropout\784-100',
     help='path of json configuration'
 )
 parser.add_argument(
     '--trained_path',
     type=str,
     default=r'.',
-    # default=r'D:\Results_data\BP_perceptron_without_dropout\784-100\S-11',
+    #default=r'D:\Results_data\BP_perceptron_without_dropout\784-100\S-11',
     help='path of model_dict_state_file'
 )
 args = parser.parse_args()
@@ -80,12 +80,12 @@ if jparams['dataset'] == 'mnist':
 
         train_loader = torch.utils.data.DataLoader(train_set, batch_size=jparams['batchSize'], shuffle=True)
 
-    elif jparams['action'] == 'semi-supervised' or jparams['splitData'] == 1:
+    if jparams['action'] == 'semi-supervised' or jparams['splitData'] :
         train_set = torchvision.datasets.MNIST(root='./data', train=True, download=True,
                                                transform=torchvision.transforms.Compose(transforms),
                                                target_transform=ReshapeTransformTarget(10))
         targets = train_set.targets
-        semi_seed = 13
+        semi_seed = 65
 
         # seperate the supervised and unsupervised dataset
         supervised_dataset, unsupervised_dataset = Semisupervised_dataset(train_set.data, targets,
@@ -365,12 +365,9 @@ if __name__ == '__main__':
         pretrain_error_list = []
         pretest_error_list = []
 
-        # construct the layer-wise parameters
-        supervised_optimizer = optimizer
-        del(optimizer)
-
+        # use the pre-defined parameters as supervised pre-training parameters
         for epoch in tqdm(range(jparams['pre_epochs'])):
-            pretrain_error_epoch = train_bp(net, jparams, supervised_loader, epoch, supervised_optimizer)
+            pretrain_error_epoch = train_bp(net, jparams, supervised_loader, epoch, optimizer)
             pretrain_error_list.append(pretrain_error_epoch.item())
             # testing process
             pretest_error_epoch = test_bp(net, test_loader)
@@ -379,7 +376,6 @@ if __name__ == '__main__':
             PretrainFrame = updateDataframe(BASE_PATH, PretrainFrame, pretrain_error_list, pretest_error_list, 'pre_supervised.csv')
             # save the entire model
             torch.save(net.state_dict(), BASE_PATH + prefix + 'model_pre_supervised_state_dict.pt')
-
 
         SEMIFRAME = initDataframe(BASE_PATH, method='semi-supervised', dataframe_to_init='semi-supervised.csv')
 
@@ -391,26 +387,43 @@ if __name__ == '__main__':
         for idx, (name, param) in enumerate(net.named_parameters()):
             layer_names.append(name)
             # print(f'{idx}: {name}')
-        parameters = []
+        supervised_parameters = []
         for idx, name in enumerate(layer_names):
             # update learning rate
             if idx % 2 == 0:
                 lr_indx = int(idx / 2)
                 lr = jparams['lr'][lr_indx]
             # append layer parameters
-            parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+            supervised_parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
                             'lr': lr}]
 
         # construct the optimizer
         # TODO changer optimizer to ADAM
         if jparams['Optimizer'] == 'SGD':
-            unsupervised_optimizer = torch.optim.SGD(parameters)
+            supervised_optimizer = torch.optim.SGD(supervised_parameters)
         elif jparams['Optimizer'] == 'Adam':
-            unsupervised_optimizer = torch.optim.Adam(parameters)
+            supervised_optimizer = torch.optim.Adam(supervised_parameters)
 
         for epoch in tqdm(range(jparams['epochs'])):
+            k = (epoch+1)*3/200
+            unsupervised_lr = [i*k for i in jparams["lr"]]
+            unsupervised_parameters = []
+            for idx, name in enumerate(layer_names):
+                # update learning rate
+                if idx % 2 == 0:
+                    lr_indx = int(idx / 2)
+                    lr = unsupervised_lr[lr_indx]
+                # append layer parameters
+                unsupervised_parameters += [
+                    {'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+                     'lr': lr}]
+            if jparams['Optimizer'] == 'SGD':
+                unsupervised_optimizer = torch.optim.SGD(unsupervised_parameters)
+            elif jparams['Optimizer'] == 'Adam':
+                unsupervised_optimizer = torch.optim.Adam(unsupervised_parameters)
+
             # supervised reminder
-            pretrain_error_epoch = train_bp(net, jparams, supervised_loader, epoch, unsupervised_optimizer)
+            pretrain_error_epoch = train_bp(net, jparams, supervised_loader, epoch, supervised_optimizer)
             supervised_test_epoch = test_bp(net, test_loader)
             supervised_test_error_list.append(supervised_test_epoch.item())
             # unsupervised training
@@ -422,89 +435,6 @@ if __name__ == '__main__':
             # save the entire model
             torch.save(net.state_dict(), BASE_PATH + prefix + 'model_semi_state_dict.pt')
 
-
-    # <editor-fold desc="Test a training methods with little dataset">
-    elif jparams['action'] == 'test':
-        '''plot the evolution of homeostasis term with a little subset'''
-
-        iterations = 50
-        train_iterator = iter(train_loader)
-        test_iterator = iter(test_loader)
-        class_iterator = iter(class_loader)
-
-        # we re-load the trained network
-        net.load_state_dict(torch.load(
-            r'C:\Users\CNRS-THALES\OneDrive\文档\Homeostasis_python\bp_convNet\analysis\784-500\BP\model_state_dict.pt'))
-        net.train()
-
-        # Define the test methods
-        test_method = 'bp_Xth'
-
-        criterion = torch.nn.MSELoss()
-        if jparams['Optimizer'] == 'SGD':
-            optimizer = torch.optim.SGD(net.parameters(), lr=jparams['lr'][0])
-        elif jparams['Optimizer'] == 'Adam':
-            optimizer = torch.optim.Adam(net.parameters(), lr=jparams['lr'][0])
-
-        if jparams['batchSize'] == 1:
-            Y_p = torch.zeros(jparams['fcLayers'][-1], device=net.device)
-
-        Xth_record = torch.zeros((1, jparams['fcLayers'][-1]), device=net.device)
-        Yp_record = torch.zeros((1, jparams['fcLayers'][-1]), device=net.device)
-        Xth = torch.zeros(jparams['fcLayers'][-1], device=net.device)
-        targets_record = []
-
-        for i in range(iterations):
-
-            image, target = next(train_iterator)
-            targets_record.append(target)
-
-            if net.cuda:
-                image = image.to(net.device)
-
-            optimizer.zero_grad()
-
-            # forward propagation
-            output = net(jparams, image.to(torch.float32))
-            unsupervised_targets = torch.zeros(output.size(), device=net.device)
-            unsupervised_targets.scatter_(1, torch.topk(output.detach() - Xth, jparams['nudge_N']).indices,
-                                          torch.ones(output.size(), device=net.device))
-
-            target_activity = jparams['nudge_N'] / jparams['fcLayers'][-1]
-
-            if jparams['batchSize'] == 1:
-                Y_p = (1 - jparams['eta']) * Y_p + jparams['eta'] * unsupervised_targets[0]
-                Xth += jparams['gamma'] * (Y_p - target_activity)
-            else:
-                Y_p = torch.mean(unsupervised_targets, axis=0)
-                Xth += jparams['gamma'] * (Y_p - target_activity)
-
-            # calculate the loss on the gpu
-            loss = criterion(output, unsupervised_targets.to(torch.float32))
-            loss.backward()
-            # print('the backward loss is:', net.W[0].weight.grad)
-            optimizer.step()
-
-            if i == 0:
-                Xth_record[0, :] = Xth
-                Yp_record[0, :] = Y_p
-            else:
-                Xth_record = torch.cat((Xth_record, Xth.reshape(1, jparams['fcLayers'][-1])), dim=0)
-                Yp_record = torch.cat((Yp_record, Y_p.reshape(1, jparams['fcLayers'][-1])), dim=0)
-
-        # Create the dossier to save the evolution figures
-        path_test = pathlib.Path(BASE_PATH + prefix + 'evolution')
-        path_test.mkdir(parents=True, exist_ok=True)
-
-        if jparams['batchSize'] == 1:
-            xlabel = 'Image number'
-        else:
-            xlabel = 'Batch number'
-
-        plot_output(Xth_record, jparams['fcLayers'][-1], xlabel, 'Xth values', path_test, prefix)
-        plot_output(Yp_record, jparams['fcLayers'][-1], xlabel, 'Neuron activities', path_test, prefix)
-        #np.savetxt(path_test / 'target_record.txt', np.asarray(targets_record))
-    # </editor-fold>
 
     # <editor-fold desc="Analyze a trained network">
     elif jparams['action'] == 'visu':
@@ -527,30 +457,30 @@ if __name__ == '__main__':
         print(one2one_result)
         np.savetxt(BASE_PATH + prefix + 'one2one.txt', one2one_result, delimiter=',')
 
-        # we train the classification layer
-        class_net = Classlayer(jparams)
-
-        # create dataframe for classification layer
-        class_dataframe = initDataframe(BASE_PATH, method='classification_layer',
-                                        dataframe_to_init='classification_layer.csv')
-        torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict_0.pt')
-        class_train_error_list = []
-        final_test_error_list = []
-        final_loss_error_list = []
-
-        # at the end of unsupervised learning we train the final classification layer
-        for epoch in tqdm(range(jparams['class_epoch'])):
-            # we train the classification layer
-            class_train_error_epoch = classify_network(net, class_net, jparams, layer_loader)
-            class_train_error_list.append(class_train_error_epoch.item())
-            # we test the final test error
-            final_test_error_epoch, final_loss_epoch = test_unsupervised_layer(net, class_net, jparams, test_loader)
-            final_test_error_list.append(final_test_error_epoch.item())
-            final_loss_error_list.append(final_loss_epoch.item())
-            class_dataframe = updateDataframe(BASE_PATH, class_dataframe, class_train_error_list, final_test_error_list,
-                                              filename='classification_layer.csv', loss=final_loss_error_list)
-            # save the trained class_net
-            torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict.pt')
+        # # we train the classification layer
+        # class_net = Classlayer(jparams)
+        #
+        # # create dataframe for classification layer
+        # class_dataframe = initDataframe(BASE_PATH, method='classification_layer',
+        #                                 dataframe_to_init='classification_layer.csv')
+        # torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict_0.pt')
+        # class_train_error_list = []
+        # final_test_error_list = []
+        # final_loss_error_list = []
+        #
+        # # at the end of unsupervised learning we train the final classification layer
+        # for epoch in tqdm(range(jparams['class_epoch'])):
+        #     # we train the classification layer
+        #     class_train_error_epoch = classify_network(net, class_net, jparams, layer_loader)
+        #     class_train_error_list.append(class_train_error_epoch.item())
+        #     # we test the final test error
+        #     final_test_error_epoch, final_loss_epoch = test_unsupervised_layer(net, class_net, jparams, test_loader)
+        #     final_test_error_list.append(final_test_error_epoch.item())
+        #     final_loss_error_list.append(final_loss_epoch.item())
+        #     class_dataframe = updateDataframe(BASE_PATH, class_dataframe, class_train_error_list, final_test_error_list,
+        #                                       filename='classification_layer.csv', loss=final_loss_error_list)
+        #     # save the trained class_net
+        #     torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict.pt')
 
     # </editor-fold>
 
@@ -642,6 +572,101 @@ if __name__ == '__main__':
             imShape = jparams['imShape'][0:2]
             plot_imshow(overlap, jparams['fcLayers'][-1], display, imShape, 'overlap', path_imshow, prefix)
     # </editor-fold>
+
+    if jparams['maximum_class']:
+        # get the labels for output neurons
+        response = classify(net, jparams, class_loader)
+        # create the images path
+        path_class = pathlib.Path(BASE_PATH + prefix + 'maxClass')
+        path_class.mkdir(parents=True, exist_ok=True)
+        if jparams['dataset'] == 'digits':
+            data_average = 3.8638
+            lr = 0.1
+            nb_epoch = 100
+        elif jparams['dataset'] == 'mnist':
+            data_average = 9.20
+            lr = 0.005
+            nb_epoch = 100
+
+        image_max = torch.zeros(jparams['n_class'], 28 * 28)
+
+        indx_neurons = []
+        indx_all_class = []
+        max_neurons_per_class = jparams['fcLayers'][-1]  # change to the number of winners 'k'
+        # neuron_per_class = int(display[0] * display[1] / jparams['n_class'])
+
+        # select the neuron to be presented at the beginning
+        for i in range(jparams['n_class']):
+            index_i = (response.cpu() == i).nonzero(as_tuple=True)[0].numpy()
+            np.random.shuffle(index_i)
+            indx_all_class.append(index_i)
+            max_neurons_per_class = min(max_neurons_per_class, len(index_i))
+
+            # range_index = min(len(index_i), neuron_per_class)
+            # indx_neurons.extend(index_i[0:range_index])
+
+        indx_all_class_torch = torch.zeros([jparams['n_class'], max_neurons_per_class], dtype=torch.int64, device=net.device)
+
+        # for i in range(jparams['n_class']):
+        #     indx_all_class_torch[i, :] = torch.tensor(indx_all_class[i][0:max_neurons_per_class])
+        for i in range(jparams['n_class']):
+            indx_all_class_torch[i, :] = torch.tensor(indx_all_class[i][0:max_neurons_per_class])
+
+        nudge_class_target = torch.zeros((jparams['n_class'], jparams['fcLayers'][-1]), requires_grad=False, device=net.device)
+        nudge_class_target.scatter_(1, indx_all_class_torch,
+                                        torch.ones((10, jparams['fcLayers'][-1]), requires_grad=False,
+                                                   device=net.device))
+        for i in range(jparams['n_class']):
+            if jparams['dataset'] == 'mnist':
+                image = torch.rand(1, 1, 28, 28, requires_grad=True, device=net.device)
+            net.eval()
+            for epoch in range(nb_epoch):
+                optimizer = torch.optim.Adam([image], lr=lr)
+                optimizer.zero_grad()
+                output = image
+                # # TODO max activation image for the conv layers
+                if jparams['convNet']:
+                    output = net.conv1(output)
+                    output = net.conv2(output)
+
+                output = output.view(output.size(0), -1)
+
+                for k in range(len(jparams['fcLayers'])-1):
+                    if k == len(jparams['fcLayers']) - 2:
+                        activation = 'x'
+                    else:
+                        activation = jparams['activation_function'][k]
+                    output = net.rho(net.W[k](output), activation)
+                # if not jparams['convNet']:
+                #     image = image.view(image.size(0), -1)
+                #
+                # output = output.view(output.size(0), -1)
+                #output = net.forward(image)
+                # for k in range(len(jparams['fcLayers'])-1):
+                #     activation = jparams['activation_function'][k]
+                #     output = net.rho(net.W[k](output), activation)
+
+                # print(output)
+                # TODO try to update the loss by 1-output[0,i]
+                criterion = torch.nn.CrossEntropyLoss()
+                nudge_class_target_perclass = nudge_class_target[i].reshape(1, -1).to(torch.float32)
+                #loss = -output[0][i, :]
+                loss = criterion(output, nudge_class_target_perclass)
+                loss.backward()
+                optimizer.step()
+                image = (data_average * (image.data / torch.norm(image.data).item())).requires_grad_(True)
+
+            image_max[i, :] = torch.flatten(image).detach().cpu()
+
+        figName = 'max activation images for each class'
+        imShape = jparams['imShape'][0:2]
+        display = jparams['display'][-2:]
+
+        # calculate
+        plot_imshow(image_max, jparams['n_class'], display, imShape, figName, path_class, prefix)
+
+
+
 
     # <editor-fold desc="Visualize the network with Maximum activation image">
     if jparams['maximum_activation']:

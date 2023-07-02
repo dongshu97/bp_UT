@@ -147,7 +147,7 @@ def returnMNIST(jparams):
     class_loader = torch.utils.data.DataLoader(class_set, batch_size=1200, shuffle=True)
     layer_loader = torch.utils.data.DataLoader(layer_set, batch_size=1200, shuffle=True)
 
-    if jparams['littleData']:
+    if jparams['littleData'] or jparams['action'] == 'semi-supervised':
         targets = train_set.targets
         semi_seed = 13
         supervised_dataset, unsupervised_dataset = Semisupervised_dataset(train_set.data, targets,
@@ -223,7 +223,6 @@ def jparamsCreate(pre_config, trial):
         #     jparams["dropProb"] = dropProb.copy()
         jparams["dropProb"] = [0.2, 0.05, 0.3]
 
-
     elif jparams["action"] == 'bp':
         if jparams['littleData']:
             jparams["batchSize"] = 16
@@ -251,6 +250,21 @@ def jparamsCreate(pre_config, trial):
             dropProb = [0.2, 0.5, 0]
             jparams["dropProb"] = dropProb.copy()
             # jparams["dropProb"].reverse()
+    elif jparams["action"] == 'semi-supervised':
+        jparams["batchSize"] = trial.suggest_int("batchSize", 10, 512)
+        jparams["eta"] = 0.5
+        jparams["gamma"] = 0.5
+        jparams["nudge_N"] = 1
+
+        lr = []
+        for i in range(len(jparams["fcLayers"]) - 1):
+            lr_i = trial.suggest_float("lr" + str(i), 1e-8, 1, log=True)
+            lr.append(lr_i)
+        jparams["lr"] = lr.copy()
+        jparams["Optimizer"] = 'Adam'
+        if jparams["Dropout"]:
+            dropProb = [0.2, 0.5, 0]
+            jparams["dropProb"] = dropProb.copy()
 
     elif jparams["action"] == 'class_layer':
 
@@ -340,7 +354,7 @@ def train_validation(jparams, net, trial, validation_loader, optimizer, train_lo
     # TODO verify the class_layer part or remove it
     elif jparams['action'] == 'class_layer':
         if class_net is not None and layer_loader is not None:
-            print("Training the model with unsupervised ep")
+            print("Training the classify model with unsupervised bp")
         else:
             raise ValueError("class net or labeled class data is not given ")
 
@@ -357,6 +371,67 @@ def train_validation(jparams, net, trial, validation_loader, optimizer, train_lo
         df.to_csv(filePath)
 
         return final_test_error_epoch
+    elif jparams['action'] == 'semi-supervised':
+        if supervised_loader is not None and unsupervised_loader is not None:
+            print("Training the model with semi-supervised bp")
+        else:
+            raise ValueError("supervised loader or unsupervised loader is not given ")
+
+        # define the supervised optimizer
+        layer_names = []
+        for idx, (name, param) in enumerate(net.named_parameters()):
+            layer_names.append(name)
+        supervised_parameters = []
+        for idx, name in enumerate(layer_names):
+            # update learning rate
+            if idx % 2 == 0:
+                lr_indx = int(idx / 2)
+                lr = jparams['lr'][lr_indx]
+            # append layer parameters
+            supervised_parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+                            'lr': lr}]
+        if jparams['Optimizer'] == 'SGD':
+            supervised_optimizer = torch.optim.SGD(supervised_parameters)
+        elif jparams['Optimizer'] == 'Adam':
+            supervised_optimizer = torch.optim.Adam(supervised_parameters)
+
+        for epoch in tqdm(range(jparams["epochs"])):
+            # we define the unsupervised optimizer
+            k = (epoch+1)*2/300
+            unsupervised_lr = [k*i for i in jparams["lr"]]
+            unsupervised_parameters = []
+            for idx, name in enumerate(layer_names):
+                # update learning rate
+                if idx % 2 == 0:
+                    lr_indx = int(idx / 2)
+                    lr = unsupervised_lr[lr_indx]
+                # append layer parameters
+                unsupervised_parameters += [
+                    {'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+                     'lr': lr}]
+            if jparams['Optimizer'] == 'SGD':
+                unsupervised_optimizer = torch.optim.SGD(unsupervised_parameters)
+            elif jparams['Optimizer'] == 'Adam':
+                unsupervised_optimizer = torch.optim.Adam(unsupervised_parameters)
+            # we do the semi-supervised training
+            train_error_epoch = train_bp(net, jparams, supervised_loader, epoch, supervised_optimizer)
+            Xth = train_Xth(net, jparams, unsupervised_loader, epoch, unsupervised_optimizer)
+
+            # test error
+            validation_error_epoch = test_bp(net, validation_loader)
+            trial.report(validation_error_epoch, epoch)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
+            if validation_error_epoch > 0.24:
+                # record trials
+                df = study.trials_dataframe()
+                df.to_csv(filePath)
+                raise optuna.TrialPruned()
+        df = study.trials_dataframe()
+        df.to_csv(filePath)
+        return validation_error_epoch
+
+
 
 
 def objective(trial, pre_config):
@@ -398,7 +473,7 @@ def objective(trial, pre_config):
     # construct the optimizer
     # TODO changer optimizer to ADAM
     if jparams['Optimizer'] == 'SGD':
-        optimizer = torch.optim.SGD(parameters, momentum=0.9)
+        optimizer = torch.optim.SGD(parameters)
     elif jparams['Optimizer'] == 'Adam':
         optimizer = torch.optim.Adam(parameters)
 
@@ -421,6 +496,10 @@ def objective(trial, pre_config):
             final_err = train_validation(jparams, net, trial, validation_loader, optimizer, train_loader=supervised_loader)
         else:
             final_err = train_validation(jparams, net, trial, validation_loader, optimizer, train_loader=train_loader)
+    elif jparams["action"] == 'semi-supervised':
+        net.load_state_dict(torch.load(
+            r'D:\Results_data\pretrain_BP\100labels\S-5\model_state_dict.pt', map_location=net.device))
+        final_err = train_validation(jparams, net, trial, validation_loader, optimizer, unsupervised_loader=unsupervised_loader, supervised_loader=supervised_loader)
 
     del(jparams)
 

@@ -1,7 +1,7 @@
 {
   "device": 0,
   "dataset": "mnist",
-  "action": "bp",
+  "action": "semi-supervised",
   "epochs": 200,
   "Homeo_mode": "batch",
   "test_batchSize": 512,
@@ -11,7 +11,8 @@
   "convF": 5,
   "Fpool": 2,
   "fcLayers": [784, 5000, 10],
-  "activation_function": ["relu","softmax"],
+  "pre_lr": [0, 0],
+  "activation_function": ["relu","sigmoid"],
   "lossFunction": "Cross-entropy",
   "trainLabel_number": 100,
   "littleData": 1,
