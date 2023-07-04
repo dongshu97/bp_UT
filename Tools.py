@@ -256,7 +256,8 @@ def train_Xth(net, jparams, train_loader, epoch, optimizer, supervised_response=
     # Stochastic mode
     if jparams['batchSize'] == 1:
         Y_p = torch.zeros(jparams['fcLayers'][-1], device=net.device)
-
+    # unsupervised_correct = 0
+    # pseudo_correct = 0
     for batch_idx, (data, target) in enumerate(train_loader):
         if net.cuda:
             data = data.to(net.device)
@@ -281,6 +282,9 @@ def train_Xth(net, jparams, train_loader, epoch, optimizer, supervised_response=
         # else:
 
         unsupervised_targets, N_maxindex = net.define_unsupervised_target(output, jparams['nudge_N'], net.device, Xth=Xth)
+        # pseudo_labels, peudo_maxindex = net.define_unsupervised_target(output, jparams['nudge_N'], net.device, Xth=None)
+        # unsupervised_correct += (target == torch.argmax(unsupervised_targets, dim=1)).sum().float()
+        # pseudo_correct += (target == torch.argmax(pseudo_labels, dim=1)).sum().float()
         # label smoothing
         unsupervised_targets = net.smoothLabels(unsupervised_targets, 0.2, jparams['nudge_N'])
 
@@ -300,6 +304,9 @@ def train_Xth(net, jparams, train_loader, epoch, optimizer, supervised_response=
         # calculate the loss on the gpu
         loss = criterion(output, unsupervised_targets.to(torch.float32))
         loss.backward()
+        # if jparams['randomHidden']:
+        #   for i in range(len(net.W)-1):
+        #        net.W[i].weight.grad =
         # print('the backward loss is:', net.W[0].weight.grad)
         optimizer.step()
 
@@ -308,6 +315,8 @@ def train_Xth(net, jparams, train_loader, epoch, optimizer, supervised_response=
     # if args.unlabeledPercent != 0 and args.unlabeledPercent != 1:
     #     return Xth, supervised_response
     # else:
+    # print('unsupervised correct is:', unsupervised_correct)
+    # print('pseudo correct is:', pseudo_correct)
     return Xth
 
 

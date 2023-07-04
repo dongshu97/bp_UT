@@ -85,7 +85,10 @@ if jparams['dataset'] == 'mnist':
                                                transform=torchvision.transforms.Compose(transforms),
                                                target_transform=ReshapeTransformTarget(10))
         targets = train_set.targets
-        semi_seed = 65
+        if jparams['semi_seed'] < 0:
+            semi_seed = None
+        else:
+            semi_seed = jparams['semi_seed']
 
         # seperate the supervised and unsupervised dataset
         supervised_dataset, unsupervised_dataset = Semisupervised_dataset(train_set.data, targets,
@@ -360,7 +363,7 @@ if __name__ == '__main__':
         torch.save(net.state_dict(), BASE_PATH + prefix + 'model_pre_supervised_state_dict0.pt')
 
         # init Dataframe
-        PretrainFrame = initDataframe(BASE_PATH, method='supervised', dataframe_to_init='pre_supervised.csv')
+        PretrainFrame = initDataframe(BASE_PATH, method='bp', dataframe_to_init='pre_supervised.csv')
 
         pretrain_error_list = []
         pretest_error_list = []
@@ -382,7 +385,7 @@ if __name__ == '__main__':
         supervised_test_error_list = []
         entire_test_error_list = []
 
-        # define unsupervised optimizer
+        # define supervised optimizer
         layer_names = []
         for idx, (name, param) in enumerate(net.named_parameters()):
             layer_names.append(name)
@@ -405,28 +408,42 @@ if __name__ == '__main__':
             supervised_optimizer = torch.optim.Adam(supervised_parameters)
 
         for epoch in tqdm(range(jparams['epochs'])):
-            k = (epoch+1)*3/200
-            unsupervised_lr = [i*k for i in jparams["lr"]]
+            k1 = (epoch+1)*3/200
+            unsupervised_lr = [i*k1 for i in jparams["lr"]]
+            k2 = np.exp(-(epoch+1)/30)
+            supervised_lr = [i*k2 for i in jparams["lr"]]
+            print('k1 is:', k1)
+            print('unsupervised lr is:', unsupervised_lr)
+            print('k2 is:', k2)
+            print('supervised lr is:', supervised_lr)
             unsupervised_parameters = []
+            supervised_parameters = []
             for idx, name in enumerate(layer_names):
                 # update learning rate
                 if idx % 2 == 0:
                     lr_indx = int(idx / 2)
-                    lr = unsupervised_lr[lr_indx]
                 # append layer parameters
                 unsupervised_parameters += [
                     {'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
-                     'lr': lr}]
+                     'lr': unsupervised_lr[lr_indx]}]
+                supervised_parameters += [
+                    {'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+                     'lr': supervised_lr[lr_indx]}]
             if jparams['Optimizer'] == 'SGD':
                 unsupervised_optimizer = torch.optim.SGD(unsupervised_parameters)
+                supervised_optimizer = torch.optim.SGD(supervised_parameters)
             elif jparams['Optimizer'] == 'Adam':
                 unsupervised_optimizer = torch.optim.Adam(unsupervised_parameters)
+                supervised_optimizer = torch.optim.Adam(supervised_parameters)
 
             # supervised reminder
             pretrain_error_epoch = train_bp(net, jparams, supervised_loader, epoch, supervised_optimizer)
             supervised_test_epoch = test_bp(net, test_loader)
             supervised_test_error_list.append(supervised_test_epoch.item())
+            # supervised_test_error_list.append(0)
             # unsupervised training
+            # if jparams['gammaDecay'] > 0:
+            #     net.gamma = net.gamma*jparams['gammaDecay']
             Xth = train_Xth(net, jparams, unsupervised_loader, epoch, unsupervised_optimizer)
             entire_test_epoch = test_bp(net, test_loader)
             entire_test_error_list.append(entire_test_epoch.item())
@@ -687,7 +704,7 @@ if __name__ == '__main__':
             nb_epoch = 100
         elif jparams['dataset'] == 'mnist':
             data_average = 9.20
-            lr = 0.2
+            lr = 0.35
             nb_epoch = 500
 
         # This part does not apply the batch

@@ -2,7 +2,7 @@
   "device": 0,
   "dataset": "mnist",
   "action": "semi-supervised",
-  "epochs": 200,
+  "epochs": 100,
   "Homeo_mode": "batch",
   "test_batchSize": 512,
   "convNet": 0,

@@ -189,7 +189,10 @@ def jparamsCreate(pre_config, trial):
     # if jparams["dataset"] == 'mnist':
     #     jparams["class_seed"] = trial.suggest_int("class_seed", 0, 42)
     if jparams['littleData']:
-        jparams["pre_batchSize"] = trial.suggest_int("pre_batchSize", 10, min(jparams["trainLabel_number"], 512))
+        if jparams["action"] == 'semi-supervised':
+            jparams["pre_batchSize"] = 21
+        else:
+            jparams["pre_batchSize"] = trial.suggest_int("pre_batchSize", 10, min(jparams["trainLabel_number"], 512))
 
     if jparams["action"] == 'bp_Xth':
         if jparams['Homeo_mode'] == 'batch':
@@ -253,13 +256,14 @@ def jparamsCreate(pre_config, trial):
     elif jparams["action"] == 'semi-supervised':
         jparams["batchSize"] = trial.suggest_int("batchSize", 10, 512)
         jparams["eta"] = 0.5
-        jparams["gamma"] = 0.5
+        jparams["gamma"] = 0.01
         jparams["nudge_N"] = 1
 
-        lr = []
-        for i in range(len(jparams["fcLayers"]) - 1):
-            lr_i = trial.suggest_float("lr" + str(i), 1e-8, 1, log=True)
-            lr.append(lr_i)
+        lr_0 = trial.suggest_float("lr0", 1e-8, 1, log=True)
+        lr = [lr_0, lr_0*100]
+        # for i in range(len(jparams["fcLayers"]) - 1):
+        #     lr_i = trial.suggest_float("lr" + str(i), 1e-8, 1, log=True)
+        #     lr.append(lr_i)
         jparams["lr"] = lr.copy()
         jparams["Optimizer"] = 'Adam'
         if jparams["Dropout"]:
@@ -397,7 +401,7 @@ def train_validation(jparams, net, trial, validation_loader, optimizer, train_lo
 
         for epoch in tqdm(range(jparams["epochs"])):
             # we define the unsupervised optimizer
-            k = (epoch+1)*2/300
+            k = (epoch+1)*3/200
             unsupervised_lr = [k*i for i in jparams["lr"]]
             unsupervised_parameters = []
             for idx, name in enumerate(layer_names):
@@ -422,11 +426,11 @@ def train_validation(jparams, net, trial, validation_loader, optimizer, train_lo
             trial.report(validation_error_epoch, epoch)
             if trial.should_prune():
                 raise optuna.TrialPruned()
-            if validation_error_epoch > 0.24:
-                # record trials
-                df = study.trials_dataframe()
-                df.to_csv(filePath)
-                raise optuna.TrialPruned()
+            # if validation_error_epoch > 0.24:
+            #     # record trials
+            #     df = study.trials_dataframe()
+            #     df.to_csv(filePath)
+            #     raise optuna.TrialPruned()
         df = study.trials_dataframe()
         df.to_csv(filePath)
         return validation_error_epoch
@@ -498,7 +502,7 @@ def objective(trial, pre_config):
             final_err = train_validation(jparams, net, trial, validation_loader, optimizer, train_loader=train_loader)
     elif jparams["action"] == 'semi-supervised':
         net.load_state_dict(torch.load(
-            r'D:\Results_data\pretrain_BP\100labels\S-5\model_state_dict.pt', map_location=net.device))
+            r'D:\Results_data\pretrain_BP\100labels\S-1\model_state_dict.pt', map_location=net.device))
         final_err = train_validation(jparams, net, trial, validation_loader, optimizer, unsupervised_loader=unsupervised_loader, supervised_loader=supervised_loader)
 
     del(jparams)
@@ -659,26 +663,27 @@ if __name__=='__main__':
     # create the filepath for saving the optuna trails
     filePath = BASE_PATH + prefix + "test.csv"
     study_name = str(time.asctime())
-    study = optuna.create_study(direction="minimize",
+    study = optuna.create_study(direction="minimize", sampler=optuna.samplers.RandomSampler(),
+                                pruner=optuna.pruners.PercentilePruner(45, n_startup_trials=10, n_warmup_steps=15),
                                 study_name=study_name, storage='sqlite:///optuna_bp_unsupervised.db')
 
     study.enqueue_trial(
         {
-            "pre_batchSize": 32,
+            "batchSize": 32,
             #"gamma": 0.3,
             #"nudge_N": 5,
             "lr0":  0.0008,
-            "lr1": 0.0001,
+            # "lr1": 0.0001,
         }
     )
 
     study.enqueue_trial(
         {
-            "pre_batchSize": 16,
+            "batchSize": 16,
             #"gamma": 0.5,
             #"nudge_N": 5,
             "lr0":  0.0001,
-            "lr1": 0.00006,
+            # "lr1": 0.00006,
         }
     )
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
