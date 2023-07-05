@@ -274,13 +274,7 @@ def train_Xth(net, jparams, train_loader, epoch, optimizer, supervised_response=
         # forward propagation
         output = net(data.to(torch.float32))
 
-        # create the unsupervised target on GPU
-        # unsupervised_targets, N_maxindex = net.defi_N_target(output - Xth, args.nudge_N)
-        # if args.unlabeledPercent != 0 and args.unlabeledPercent != 1:
-        #     assert args.batchSize == 1 and args.fcLayers[-1] == 10, 'This targets function has not been written yet'
-        #     unsupervised_targets, supervised_response = net.alter_N_target_sm(output-Xth, target, supervised_response, args.nudge_N)
-        # else:
-
+        # create the unsupervised target
         unsupervised_targets, N_maxindex = net.define_unsupervised_target(output, jparams['nudge_N'], net.device, Xth=Xth)
         # pseudo_labels, peudo_maxindex = net.define_unsupervised_target(output, jparams['nudge_N'], net.device, Xth=None)
         # unsupervised_correct += (target == torch.argmax(unsupervised_targets, dim=1)).sum().float()
@@ -305,10 +299,14 @@ def train_Xth(net, jparams, train_loader, epoch, optimizer, supervised_response=
         loss = criterion(output, unsupervised_targets.to(torch.float32))
         loss.backward()
         # if jparams['randomHidden']:
-        #   for i in range(len(net.W)-1):
-        #        net.W[i].weight.grad =
+        #  # we keep only the gradients of output layer
+        #     for i in range(len(net.W)-1):
+        #         net.W[i].weight.grad = torch.zeros(net.W[i].weight.size(), device=net.device)
+        #         net.W[i].bias.grad = torch.zeros(net.W[i].bias.size(), device=net.device)
         # print('the backward loss is:', net.W[0].weight.grad)
+
         optimizer.step()
+
 
         # # update the lr after at the end of each epoch
         # scheduler.step()
@@ -579,7 +577,7 @@ def initDataframe(path, method='bp', dataframe_to_init='results.csv'):
         elif method == 'bp_Xth':
             columns_header = ['One2one_av_Error', 'Min_One2one_av', 'One2one_max_Error', 'Min_One2one_max_Error']
         elif method == 'semi-supervised':
-            columns_header= ['Supervised_Test_Error', 'Min_Supervised_Test_Error', 'Entire_Test_Error', 'Min_Entire_Test_Error']
+            columns_header = ['Unsupervised_Test_Error', 'Min_Unsupervised_Test_Error', 'Supervised_Test_Error', 'Min_Supervised_Test_Error']
         elif method == 'classification_layer':
             columns_header = ['Train_Class_Error', 'Min_Train_Class_Error', 'Final_Test_Error', 'Min_Final_Test_Error',
                               'Final_Test_Loss', 'Min_Final_Test_Loss']

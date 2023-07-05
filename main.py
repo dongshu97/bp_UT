@@ -223,29 +223,28 @@ if __name__ == '__main__':
         json.dump(jparams, outfile)
 
     # define Optimizer
-        # construct the layer-wise parameters
-        layer_names = []
-        for idx, (name, param) in enumerate(net.named_parameters()):
-            layer_names.append(name)
-        parameters = []
-        for idx, name in enumerate(layer_names):
-            # update learning rate
-            if idx % 2 == 0:
-                lr_indx = int(idx / 2)
-                if jparams['action'] == 'semi-supervised':
-                    lr = jparams['pre_lr'][lr_indx]
-                else:
-                    lr = jparams['lr'][lr_indx]
-            # append layer parameters
-            parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
-                            'lr': lr}]
+    # construct the layer-wise parameters
+    layer_names = []
+    for idx, (name, param) in enumerate(net.named_parameters()):
+        layer_names.append(name)
+    parameters = []
+    for idx, name in enumerate(layer_names):
+        # update learning rate
+        if idx % 2 == 0:
+            lr_indx = int(idx / 2)
+            lr = jparams['lr'][lr_indx]
+        # append layer parameters
+        parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+                        'lr': lr}]
 
-        # construct the optimizer
-        # TODO changer optimizer to ADAM
-        if jparams['Optimizer'] == 'SGD':
-            optimizer = torch.optim.SGD(parameters, momentum=0.9)
-        elif jparams['Optimizer'] == 'Adam':
-            optimizer = torch.optim.Adam(parameters)
+    # construct the optimizer
+    # TODO changer optimizer to ADAM
+    if jparams['Optimizer'] == 'SGD':
+        optimizer = torch.optim.SGD(parameters, momentum=0.99)
+    elif jparams['Optimizer'] == 'Adam':
+        optimizer = torch.optim.Adam(parameters)
+
+
 
     # <editor-fold desc="Train with supervised BP">
     if jparams['action'] == 'bp':
@@ -368,6 +367,9 @@ if __name__ == '__main__':
         pretrain_error_list = []
         pretest_error_list = []
 
+        # define Scheduler
+        scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=1, end_factor=0.1, total_iters=500)
+
         # use the pre-defined parameters as supervised pre-training parameters
         for epoch in tqdm(range(jparams['pre_epochs'])):
             pretrain_error_epoch = train_bp(net, jparams, supervised_loader, epoch, optimizer)
@@ -379,76 +381,44 @@ if __name__ == '__main__':
             PretrainFrame = updateDataframe(BASE_PATH, PretrainFrame, pretrain_error_list, pretest_error_list, 'pre_supervised.csv')
             # save the entire model
             torch.save(net.state_dict(), BASE_PATH + prefix + 'model_pre_supervised_state_dict.pt')
+            scheduler.step()
 
         SEMIFRAME = initDataframe(BASE_PATH, method='semi-supervised', dataframe_to_init='semi-supervised.csv')
 
         supervised_test_error_list = []
         entire_test_error_list = []
-
-        # define supervised optimizer
-        layer_names = []
-        for idx, (name, param) in enumerate(net.named_parameters()):
-            layer_names.append(name)
-            # print(f'{idx}: {name}')
-        supervised_parameters = []
+        # define the unsupervised optimizer
+        unsupervised_parameters = []
         for idx, name in enumerate(layer_names):
             # update learning rate
             if idx % 2 == 0:
                 lr_indx = int(idx / 2)
-                lr = jparams['lr'][lr_indx]
             # append layer parameters
-            supervised_parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
-                            'lr': lr}]
-
-        # construct the optimizer
-        # TODO changer optimizer to ADAM
+            unsupervised_parameters += [
+                {'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
+                 'lr': jparams['lr'][lr_indx]}]
         if jparams['Optimizer'] == 'SGD':
-            supervised_optimizer = torch.optim.SGD(supervised_parameters)
+            unsupervised_optimizer = torch.optim.SGD(unsupervised_parameters)
         elif jparams['Optimizer'] == 'Adam':
-            supervised_optimizer = torch.optim.Adam(supervised_parameters)
+            unsupervised_optimizer = torch.optim.Adam(unsupervised_parameters)
+
+        unsupervised_scheduler = torch.optim.lr_scheduler.LinearLR(unsupervised_optimizer,
+                                                                   start_factor=0.001, end_factor=0.3, total_iters=400)
 
         for epoch in tqdm(range(jparams['epochs'])):
-            k1 = (epoch+1)*3/200
-            unsupervised_lr = [i*k1 for i in jparams["lr"]]
-            k2 = np.exp(-(epoch+1)/30)
-            supervised_lr = [i*k2 for i in jparams["lr"]]
-            print('k1 is:', k1)
-            print('unsupervised lr is:', unsupervised_lr)
-            print('k2 is:', k2)
-            print('supervised lr is:', supervised_lr)
-            unsupervised_parameters = []
-            supervised_parameters = []
-            for idx, name in enumerate(layer_names):
-                # update learning rate
-                if idx % 2 == 0:
-                    lr_indx = int(idx / 2)
-                # append layer parameters
-                unsupervised_parameters += [
-                    {'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
-                     'lr': unsupervised_lr[lr_indx]}]
-                supervised_parameters += [
-                    {'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
-                     'lr': supervised_lr[lr_indx]}]
-            if jparams['Optimizer'] == 'SGD':
-                unsupervised_optimizer = torch.optim.SGD(unsupervised_parameters)
-                supervised_optimizer = torch.optim.SGD(supervised_parameters)
-            elif jparams['Optimizer'] == 'Adam':
-                unsupervised_optimizer = torch.optim.Adam(unsupervised_parameters)
-                supervised_optimizer = torch.optim.Adam(supervised_parameters)
-
-            # supervised reminder
-            pretrain_error_epoch = train_bp(net, jparams, supervised_loader, epoch, supervised_optimizer)
-            supervised_test_epoch = test_bp(net, test_loader)
-            supervised_test_error_list.append(supervised_test_epoch.item())
-            # supervised_test_error_list.append(0)
             # unsupervised training
-            # if jparams['gammaDecay'] > 0:
-            #     net.gamma = net.gamma*jparams['gammaDecay']
             Xth = train_Xth(net, jparams, unsupervised_loader, epoch, unsupervised_optimizer)
             entire_test_epoch = test_bp(net, test_loader)
             entire_test_error_list.append(entire_test_epoch.item())
+            unsupervised_scheduler.step()
 
-            SEMIFRAME = updateDataframe(BASE_PATH, SEMIFRAME, supervised_test_error_list, entire_test_error_list, 'semi-supervised.csv')
+            # supervised reminder
+            pretrain_error_epoch = train_bp(net, jparams, supervised_loader, epoch, optimizer)
+            supervised_test_epoch = test_bp(net, test_loader)
+            supervised_test_error_list.append(supervised_test_epoch.item())
+            scheduler.step()
+
+            SEMIFRAME = updateDataframe(BASE_PATH, SEMIFRAME, entire_test_error_list, supervised_test_error_list, 'semi-supervised.csv')
             # save the entire model
             torch.save(net.state_dict(), BASE_PATH + prefix + 'model_semi_state_dict.pt')
 
