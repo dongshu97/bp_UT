@@ -200,6 +200,7 @@ def classify_network(net, class_net, jparams, layer_loader):
         optimizer.step()
 
         # calculate the training errors
+        #prediction = torch.argmax(F.softmax(output, dim=1), dim=1)
         prediction = torch.argmax(output, dim=1)
         correct_train += (prediction == torch.argmax(targets, dim=1)).sum().float()
         total_train += targets.size(dim=0)
@@ -416,7 +417,7 @@ def train_bp(net, jparams, train_loader, epoch, optimizer):
     return train_error
 
 
-def test_Xth(net, jparams, test_loader, response, spike_record=0):
+def test_Xth(net, jparams, test_loader, response, spike_record=0, output_record_path=None):
     '''
         Function to test the network
         '''
@@ -434,6 +435,10 @@ def test_Xth(net, jparams, test_loader, response, spike_record=0):
         predic_spike_max = torch.zeros(jparams['n_class'], jparams['n_class'], device=net.device)
         predic_spike_av = torch.zeros(jparams['n_class'], jparams['n_class'], device=net.device)
 
+    # records of the output values for the test dataset
+    if output_record_path is not None:
+        df = pd.DataFrame()
+
     for batch_idx, (data, targets) in enumerate(test_loader):
 
         if net.cuda:
@@ -441,6 +446,10 @@ def test_Xth(net, jparams, test_loader, response, spike_record=0):
             targets = targets.to(net.device)
 
         output = net(data.to(torch.float32))
+        if output_record_path is not None:
+            d2 = {'img': output.cpu().tolist(), 'target': targets.cpu().tolist()}
+            df2 = pd.DataFrame.from_records(d2)
+            df = pd.concat([df, df2])
 
         # calculate the total testing times and record the testing labels
         total_test += targets.size()[0]
@@ -477,6 +486,15 @@ def test_Xth(net, jparams, test_loader, response, spike_record=0):
                 predic_spike_av[targets[batch_number], predict_av[batch_number]] += 1
                 predic_spike_max[targets[batch_number], predict_max[batch_number]] += 1
 
+    # save the output values:
+    if output_record_path is not None:
+        if os.name != 'posix':
+            prefix = '\\'
+        else:
+            prefix = '/'
+        df.to_pickle(str(output_record_path)+prefix+'output_records.pkl')
+        del(df)
+
     # calculate the test error
     test_error_av = 1 - correct_av_test / total_test
     test_error_max = 1 - correct_max_test / total_test
@@ -485,7 +503,7 @@ def test_Xth(net, jparams, test_loader, response, spike_record=0):
     return test_error_av, test_error_max
 
 
-def test_bp(net, test_loader):
+def test_bp(net, test_loader, output_record_path=None):
     '''
     Function to test the network
     '''
@@ -497,6 +515,10 @@ def test_bp(net, test_loader):
     # records of accuracy for supervised BP
     correct_test = torch.zeros(1, device=net.device).squeeze()
 
+    # records of the output values for the test dataset
+    if output_record_path is not None:
+        df = pd.DataFrame()
+
     for batch_idx, (data, targets) in enumerate(test_loader):
 
         if net.cuda:
@@ -505,6 +527,11 @@ def test_bp(net, test_loader):
 
         output = net(data.to(torch.float32))
 
+        if output_record_path is not None:
+            d2 = {'img': output.cpu().tolist(), 'target': targets.cpu().tolist()}
+            df2 = pd.DataFrame.from_records(d2)
+            df = pd.concat([df, df2])
+
         # calculate the total testing times and record the testing labels
         total_test += targets.size()[0]
 
@@ -512,6 +539,15 @@ def test_bp(net, test_loader):
 
         prediction = torch.argmax(output, dim=1)
         correct_test += (prediction == targets).sum().float()
+
+    # save the output values:
+    if output_record_path is not None:
+        if os.name != 'posix':
+            prefix = '\\'
+        else:
+            prefix = '/'
+        df.to_pickle(str(output_record_path) + prefix + 'output_records.pkl')
+        del (df)
 
     test_error = 1 - correct_test / total_test
     return test_error
@@ -551,6 +587,7 @@ def test_unsupervised_layer(net, class_net, jparams, test_loader):
         loss_test += loss.item()
 
         # calculate the training errors
+        #prediction = torch.argmax(F.softmax(output, dim=1), dim=1)
         prediction = torch.argmax(output, dim=1)
         correct_test += (prediction == targets).sum().float()
 

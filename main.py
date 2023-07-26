@@ -36,6 +36,7 @@ parser.add_argument(
     #default=r'D:\Results_data\BP_perceptron_without_dropout\784-100\S-11',
     help='path of model_dict_state_file'
 )
+
 args = parser.parse_args()
 
 if os.name != 'posix':
@@ -368,7 +369,7 @@ if __name__ == '__main__':
         pretest_error_list = []
 
         # define Scheduler
-        scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=1, end_factor=0.1, total_iters=500)
+        scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=1, end_factor=0.05, total_iters=500)
 
         # use the pre-defined parameters as supervised pre-training parameters
         for epoch in tqdm(range(jparams['pre_epochs'])):
@@ -403,7 +404,7 @@ if __name__ == '__main__':
             unsupervised_optimizer = torch.optim.Adam(unsupervised_parameters)
 
         unsupervised_scheduler = torch.optim.lr_scheduler.LinearLR(unsupervised_optimizer,
-                                                                   start_factor=0.001, end_factor=0.3, total_iters=400)
+                                                                   start_factor=0.001, end_factor=0.15, total_iters=400)
 
         for epoch in tqdm(range(jparams['epochs'])):
             # unsupervised training
@@ -422,10 +423,30 @@ if __name__ == '__main__':
             # save the entire model
             torch.save(net.state_dict(), BASE_PATH + prefix + 'model_semi_state_dict.pt')
 
+    elif jparams['action'] == 'visuSemi':
+        # we load the supervised pretraining network
+        net.load_state_dict(torch.load(args.trained_path + prefix + 'model_pre_supervised_state_dict.pt'))
+        net.eval()
+        # we register the output of supervised pretraining
+        supervised_output_path = pathlib.Path(BASE_PATH + prefix + 'supervised')
+        supervised_output_path.mkdir(parents=True, exist_ok=True)
+        pretrain_error = test_bp(net, test_loader, output_record_path=supervised_output_path)
+        print('pretrained supervised error is:', pretrain_error)
+
+        # we load the final tranied network
+        net.load_state_dict(torch.load(args.trained_path + prefix + 'model_semi_state_dict.pt'))
+        net.eval()
+        # we register the output of final network
+        semi_output_path = pathlib.Path(BASE_PATH + prefix + 'semiOut')
+        semi_output_path.mkdir(parents=True, exist_ok=True)
+        semi_error = test_bp(net, test_loader, output_record_path=semi_output_path)
+        print('semi supervised error is:', semi_error)
+
 
     # <editor-fold desc="Analyze a trained network">
     elif jparams['action'] == 'visu':
         # we re-load the trained network
+
         net.load_state_dict(torch.load(args.trained_path + prefix +'model_state_dict.pt'))
 
         net.eval()
@@ -435,39 +456,40 @@ if __name__ == '__main__':
 
         np.savetxt(pathlib.Path(BASE_PATH)/'response.txt', response.cpu().numpy())
 
+        # TODO try also to register the output values
         test_error_av_epoch, test_error_max_epoch, \
         spike, predic_spike_max, predic_spike_av = test_Xth(net, jparams, test_loader,
-                                                           response=response, spike_record=1)
+                                                           response=response, spike_record=1, output_record_path=BASE_PATH)
         print('the one2one av is :', test_error_av_epoch)
         print('the one2one max is :', test_error_max_epoch)
         one2one_result = [test_error_av_epoch.cpu().numpy(), test_error_max_epoch.cpu().numpy()]
         print(one2one_result)
         np.savetxt(BASE_PATH + prefix + 'one2one.txt', one2one_result, delimiter=',')
 
-        # # we train the classification layer
-        # class_net = Classlayer(jparams)
-        #
-        # # create dataframe for classification layer
-        # class_dataframe = initDataframe(BASE_PATH, method='classification_layer',
-        #                                 dataframe_to_init='classification_layer.csv')
-        # torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict_0.pt')
-        # class_train_error_list = []
-        # final_test_error_list = []
-        # final_loss_error_list = []
-        #
-        # # at the end of unsupervised learning we train the final classification layer
-        # for epoch in tqdm(range(jparams['class_epoch'])):
-        #     # we train the classification layer
-        #     class_train_error_epoch = classify_network(net, class_net, jparams, layer_loader)
-        #     class_train_error_list.append(class_train_error_epoch.item())
-        #     # we test the final test error
-        #     final_test_error_epoch, final_loss_epoch = test_unsupervised_layer(net, class_net, jparams, test_loader)
-        #     final_test_error_list.append(final_test_error_epoch.item())
-        #     final_loss_error_list.append(final_loss_epoch.item())
-        #     class_dataframe = updateDataframe(BASE_PATH, class_dataframe, class_train_error_list, final_test_error_list,
-        #                                       filename='classification_layer.csv', loss=final_loss_error_list)
-        #     # save the trained class_net
-        #     torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict.pt')
+        # we train the classification layer
+        class_net = Classlayer(jparams)
+
+        # create dataframe for classification layer
+        class_dataframe = initDataframe(BASE_PATH, method='classification_layer',
+                                        dataframe_to_init='classification_layer.csv')
+        torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict_0.pt')
+        class_train_error_list = []
+        final_test_error_list = []
+        final_loss_error_list = []
+
+        # at the end of unsupervised learning we train the final classification layer
+        for epoch in tqdm(range(jparams['class_epoch'])):
+            # we train the classification layer
+            class_train_error_epoch = classify_network(net, class_net, jparams, layer_loader)
+            class_train_error_list.append(class_train_error_epoch.item())
+            # we test the final test error
+            final_test_error_epoch, final_loss_epoch = test_unsupervised_layer(net, class_net, jparams, test_loader)
+            final_test_error_list.append(final_test_error_epoch.item())
+            final_loss_error_list.append(final_loss_epoch.item())
+            class_dataframe = updateDataframe(BASE_PATH, class_dataframe, class_train_error_list, final_test_error_list,
+                                              filename='classification_layer.csv', loss=final_loss_error_list)
+            # save the trained class_net
+            torch.save(class_net.state_dict(), BASE_PATH + prefix + 'class_model_state_dict.pt')
 
     # </editor-fold>
 
