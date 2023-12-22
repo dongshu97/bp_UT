@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import pylab as P
+import random
 
 
 def plot_output(x, out_nb, xlabel, ylabel, path, prefix):
@@ -26,13 +27,20 @@ def plot_distribution(x, out_nb, file_name, path, prefix):
     fig.savefig(str(path) + prefix + file_name + '.svg', format='svg', dpi=300)
 
 
-def plot_imshow(x, out_nb, display, imShape, figName, path, prefix, responses=None):
+def plot_imshow(x, out_nb, display, imShape, figName, path, prefix, random_select=True, responses=None):
 
     fig, axes = plt.subplots(display[0], display[1])
     fig.set_size_inches(9, 6)
+    # take the random selected weights
+    if random_select:
+        range_of_ints = range(out_nb)
+        selected_ints = random.sample(range_of_ints, display[0] * display[1])
 
-    for i, ax in zip(range(out_nb), axes.flat):
-        plot = ax.imshow(x[i, :].reshape(imShape[0], imShape[1]), cmap=cm.viridis)
+    else:
+        selected_ints = range(out_nb)
+
+    for i, ax in zip(selected_ints, axes.flat):
+        plot = ax.imshow(x[i, :].reshape(imShape[0], imShape[1]), cmap=cm.binary)
         #ax.axis('off')
         ax.get_xaxis().set_visible(False)
         ax.get_yaxis().set_visible(False)
@@ -47,6 +55,24 @@ def plot_imshow(x, out_nb, display, imShape, figName, path, prefix, responses=No
     plt.savefig(str(path) + prefix + figName + '.svg', format='svg', dpi=300)
 
 
+def plot_receptiveF(weights, display, imShape, figName, path, prefix):
+    fig, axes = plt.subplots(display[0], display[1])
+    fig.set_size_inches(9, 6)
+
+    for i, ax in zip(range(weights.size(0)), axes.flat):
+        plot = ax.imshow(weights[i, :].reshape(imShape[0], imShape[1]), cmap=cm.binary)
+        #ax.axis('off')
+        ax.get_xaxis().set_visible(False)
+        ax.get_yaxis().set_visible(False)
+
+    fig.subplots_adjust(hspace=0.4, wspace=0.3)
+    cax = plt.axes([0.92, 0.1, 0.02, 0.8])
+    cb = fig.colorbar(plot, cax=cax)
+    cb.ax.tick_params(labelsize=8)
+    fig.suptitle('Receptive field ' + figName, fontsize=10)
+    plt.savefig(str(path) + prefix + figName + '.svg', format='svg', dpi=300)
+
+
 def plot_oneClass(x, display, imShape, indices, figName, path, prefix):
 
     fig, axes = plt.subplots(display[0], display[1])
@@ -55,7 +81,7 @@ def plot_oneClass(x, display, imShape, indices, figName, path, prefix):
     np.random.shuffle(indices)
 
     for i, ax in zip(indices[0:range_index], axes.flat[0:range_index]):
-        plot = ax.imshow(x[i, :].reshape(imShape[0], imShape[1]), cmap=cm.coolwarm)
+        plot = ax.imshow(x[i, :].reshape(imShape[0], imShape[1]), cmap=cm.binary)
         ax.get_xaxis().set_visible(False)
         ax.get_yaxis().set_visible(False)
         ax.set_title('neuron ' + str(i))
@@ -86,7 +112,7 @@ def plot_NeachClass(x, n_class, N, display, imShape, responces, figName, path, p
         indx_neurons.extend(index_i[0:range_index])
 
     for i, ax in zip(range(display[0]*display[1]), axes.flat):
-        plot = ax.imshow(x[indx_neurons[i], :].reshape(imShape[0], imShape[1]), cmap=cm.coolwarm)
+        plot = ax.imshow(x[indx_neurons[i], :].reshape(imShape[0], imShape[1]), cmap=cm.binary)
         # ax.axis('off')
         ax.get_xaxis().set_visible(False)
         ax.get_yaxis().set_visible(False)

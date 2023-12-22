@@ -15,172 +15,114 @@ import pickle
 import pandas as pd
 import shutil
 import torch.nn.functional as F
+from Data import generate_N_targets_label
 
-from Network import*
+from Network import *
+
+def drop_output(x, p):
+    # TODO change it to be a class
+    if p < 0 or p > 1:
+        raise ValueError("dropout probability has to be between 0 and 1, " "but got {}".format(p))
+    if p == 0:
+        p_distribut = torch.ones(x.size())
+    else:
+        binomial = torch.distributions.binomial.Binomial(probs=torch.tensor(1 - p))
+        p_distribut = binomial.sample(x.size())
+    return p_distribut
+
+def define_unsupervised_target(output, N, device, Xth=None):
+    with torch.no_grad():
+        # define unsupervised target
+
+        unsupervised_targets = torch.zeros(output.size(), device=device)
+
+        # max_index = torch.zeros(output.size(), device=device)
+        # other_index = torch.ones(output.size(), device=device)
+
+        # N_maxindex
+        if Xth != None:
+            N_maxindex = torch.topk(output.detach() - Xth, N).indices
+        else:
+            N_maxindex = torch.topk(output.detach(), N).indices
 
 
-def classify(net, jparams, class_loader):
+        # # select the least responded neurons
+        # k = int(0.5 * output.size(1))
+        # lowval = output.topk(k, dim=1)[0][:, -1]
+        # lowval = lowval.expand(output.shape[1], output.shape[0]).permute(1, 0)
+        # comp = (output >= lowval).to(output)
+        # unsupervised_targets = comp*output
 
+        # max_index.scatter_(1, N_maxindex, torch.ones(output.size(), device=device))
+        # other_index.scatter_(1, N_maxindex, torch.zeros(output.size(), device=device))
+        # unsupervised_targets = torch.clamp(output.detach() * max_index * 10 + output.detach() * other_index * 0.1, 0, 1)
+
+        unsupervised_targets.scatter_(1, N_maxindex, torch.ones(output.size(), device=device)) # WTA definition
+
+        # print('the unsupervised vector is:', unsupervised_targets)
+
+    return unsupervised_targets, N_maxindex
+
+def smoothLabels(labels, smooth_factor, nudge_N):
+    assert len(labels.shape) == 2, 'input should be a batch of one-hot-encoded data'
+    assert 0 <= smooth_factor <= 1, 'smooth_factor should be between 0 and 1'
+
+    if 0 <= smooth_factor <= 1:
+        with torch.no_grad():
+            # label smoothing
+            labels *= 1 - smooth_factor
+            labels += (nudge_N * smooth_factor) / labels.shape[1]
+            # labels = drop_output(labels)
+    else:
+        raise ValueError('Invalid label smoothing factor: ' + str(smooth_factor))
+    return labels
+
+
+def classify(net, jparams, class_loader, k_select=None):
+    # todo do the sum for each batch to save the memory
     net.eval()
 
+    class_record = torch.zeros((jparams['n_class'], jparams['fcLayers'][-1]), device=net.device)
+    labels_record = torch.zeros((jparams['n_class'], 1), device=net.device)
     for batch_idx, (data, targets) in enumerate(class_loader):
 
         if net.cuda:
             data = data.to(net.device)
-            # targets = targets.to(net.device)
+            targets = targets.to(net.device)
 
         # forward propagation
         output = net(data.to(torch.float32))
-        # make a copy in the device (it works even initially in cpu)
-        # n_output = torch.clone(output).detach().cpu()
 
-        # record all the output values
-        if batch_idx == 0:
-            result_output = output.detach()
-        else:
-            result_output = torch.cat((result_output, output.detach()), 0)
+        for i in range(jparams['n_class']):
+            indice = (targets == i).nonzero(as_tuple=True)[0]
+            labels_record[i] += len(indice)
+            class_record[i, :] += torch.sum(output[indice, :], axis=0)
 
-        # record all the class sent
-        if batch_idx == 0:
-            class_vector = targets
-        else:
-            class_vector = torch.cat((class_vector, targets), 0)
-
-    ##################### classifier one2one ########################
-
-    class_moyenne = torch.zeros((jparams['n_class'], jparams['fcLayers'][-1]), device=net.device)
-
-    for i in range(jparams['n_class']):
-        indice = (class_vector == i).nonzero(as_tuple=True)[0]
-        result_single = result_output[indice, :]
-        class_moyenne[i, :] = torch.mean(result_single, axis=0)
-
-    # for the unclassified neurons, we kick them out from the responses
-    unclassified = 0
+    # take the maximum activation as associated class
+    class_moyenne = torch.div(class_record, labels_record)
     response = torch.argmax(class_moyenne, 0)
+    # remove the unlearned neuron
     max0_indice = (torch.max(class_moyenne, 0).values == 0).nonzero(as_tuple=True)[0]
     response[max0_indice] = -1
-    unclassified += max0_indice.size(0)
 
-    return response
-
-
-def cluster(class_vector, result_output, n_class, device, k_select):
-
-    responses = [[] for k in range(len(result_output))]
-    max_response_neurons = [[] for k in range(len(result_output))]
-
-    total_unclassifited = []
-
-    for i in range(len(result_output)):
-
-        class_moyenne = torch.zeros((n_class, result_output[i][0].size()[1]), device=device)
-
-        if k_select > result_output[i][0].size()[1]:
-            raise ValueError("The presented neurons number is larger than the number of neurons in layer {}".format(i))
-
-        for n in range(n_class):
-            indice = (class_vector == n).nonzero(as_tuple=True)[0]
-            result_single = result_output[i][0][indice, :]
-            class_moyenne[n, :] = torch.mean(result_single, axis=0)
-
-        # for the unclassified neurons, we kick them out from the responses
-        unclassified = 0
-        response_layer = torch.argmax(class_moyenne, 0)
-        k_select_layer = torch.topk(class_moyenne, k_select, dim=1).indices # several classes may have one same neuron as their strongest response
-        # TODO verify max0_indice
-        max0_indice = (torch.max(class_moyenne, 0).values == 0).nonzero(as_tuple=True)[0]
-        response_layer[max0_indice] = -1
-        unclassified += max0_indice.size(0)
-        # add the responses to blank list
-        responses[i].append(response_layer)
-        max_response_neurons[i].append(k_select_layer.flatten())
-
-        total_unclassifited.append(unclassified)
-
-    return responses, max_response_neurons, total_unclassifited
-
-
-def classify_layers(net, jparams, class_loader, k_select):
-    '''To the give the class for each hidden layer'''
-
-    net.eval()
-
-    if jparams['convNet']:
-        layers_number = int(len(jparams['convLayers'])/5) + len(jparams['fcLayers']) - 1
-        conv_number = int(len(jparams['convLayers'])/5)
+    if k_select is None:
+        return response
     else:
-        layers_number = len(jparams['fcLayers']) - 1
-        conv_number = 0
-
-    result_outputs = [[] for k in range(layers_number)]
-
-    for batch_idx, (data, targets) in enumerate(class_loader):
-
-        if net.cuda:
-            data = data.to(net.device)
-            #targets = targets.to(net.device)
-
-        # record all the class sent
-        if batch_idx == 0:
-            class_vector = targets
-        else:
-            class_vector = torch.cat((class_vector, targets), 0)
-
-        # give the data before the cycle
-        x = data
-
-        # redo the forward propagation
-        if net.convNet:
-            for i in range(conv_number):
-                x = net.conv_number[i](x)
-                x = F.relu(x),
-                x = net.pool(x)
-                #x = x.view(x.size(0), -1)
-                # flatten the output of conv2 to (batch_size, 32 * 7 * 7)
-                output = x.clone().view(x.size(0), -1)
-
-                if batch_idx == 0:
-                    result_outputs[i].append(output.detach())
-                else:
-                    result_outputs[i][0] = torch.cat((result_outputs[i][0], output.detach()), 0)
-
-        for i in range(len(jparams['fcLayers'])-1):
-            x = net.rho(net.W[i](x), jparams['activation_function'][i])
-            output = x.clone()
-
-            if batch_idx == 0:
-                result_outputs[i + conv_number].append(output.detach())
-            else:
-                result_outputs[i + conv_number][0] = torch.cat((result_outputs[i + conv_number][0], output.detach()), 0)
-
-    ##################### classifier one2one ########################
-    all_responses, max_response_neurons, total_unclassified = cluster(class_vector, result_outputs, jparams['n_class'], net.device, k_select)
-
-    return all_responses, max_response_neurons, total_unclassified
+        k_select_neuron = torch.topk(class_moyenne, k_select, dim=1).indices.flatten()
+        return response, k_select_neuron
 
 
-def classify_network(net, class_net, jparams, layer_loader):
+def classify_network(net, class_net, layer_loader, optimizer, class_smooth):
     net.eval()
+
     class_net.train()
 
     # define the loss of classification layer
-    if jparams['class_activation'] == 'softmax':
-        criterion = torch.nn.CrossEntropyLoss()
-    else:
-        criterion = torch.nn.MSELoss()
-
-    parameters = list(class_net.parameters())
+    criterion = torch.nn.CrossEntropyLoss()
 
     # create the list for training errors
     correct_train = torch.zeros(1, device=net.device).squeeze()
     total_train = torch.zeros(1, device=net.device).squeeze()
-
-    # construct the optimizer
-    if jparams['class_Optimizer'] == 'Adam':
-        optimizer = torch.optim.Adam(parameters, lr=jparams['class_lr'])
-    elif jparams['class_Optimizer'] == 'SGD':
-        optimizer = torch.optim.SGD(parameters, lr=jparams['class_lr'])
 
     for batch_idx, (data, targets) in enumerate(layer_loader):
         optimizer.zero_grad()
@@ -191,9 +133,13 @@ def classify_network(net, class_net, jparams, layer_loader):
 
         # net forward
         with torch.no_grad():
-            x = net(data.to(torch.float32))
+            x = net(data.to(torch.float32)) # without the dropout
+
         # class_net forward
-        output = class_net.forward(x)
+        output = class_net(x)
+        # class label smooth
+        if class_smooth:
+            targets = smoothLabels(targets.to(torch.float32), 0.2, 1)
         loss = criterion(output, targets.to(torch.float32))
         # backpropagation
         loss.backward()
@@ -210,8 +156,7 @@ def classify_network(net, class_net, jparams, layer_loader):
     return train_error
 
 
-def train_Xth(net, jparams, train_loader, epoch, optimizer, supervised_response=None):
-
+def train_softmax(net, jparams, train_loader, epoch, optimizer):
     net.train()
     net.epoch = epoch + 1
 
@@ -222,42 +167,11 @@ def train_Xth(net, jparams, train_loader, epoch, optimizer, supervised_response=
         criterion = torch.nn.CrossEntropyLoss()
 
     Xth = torch.zeros(jparams['fcLayers'][-1], device=net.device)
-    # # construct the layer-wise parameters
-    # layer_names = []
-    # for idx, (name, param) in enumerate(net.named_parameters()):
-    #     layer_names.append(name)
-    #     # print(f'{idx}: {name}')
-    #
-    # parameters = []
-    # # prev_group_name = layer_names[0].split('.')[0] + '.' + layer_names[0].split('.')[1]
-    #
-    # for idx, name in enumerate(layer_names):
-    #
-    #     # parameter group name
-    #     # cur_group_name = name.split('.')[0] + '.' + name.split('.')[1]
-    #
-    #     # update learning rate
-    #     if idx % 2 == 0:
-    #         lr_indx = int(idx / 2)
-    #         lr = jparams['lr'][lr_indx]
-    #
-    #     # display info
-    #     # print(f'{idx}: lr = {lr:.6f}, {name}')
-    #
-    #     # append layer parameters
-    #     parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
-    #                     'lr': lr}]
-    #
-    # # construct the optimizer
-    # if jparams['Optimizer'] == 'SGD':
-    #     optimizer = torch.optim.SGD(parameters)
-    # elif jparams['Optimizer'] == 'Adam':
-    #     optimizer = torch.optim.Adam(parameters)
 
     # Stochastic mode
     if jparams['batchSize'] == 1:
         Y_p = torch.zeros(jparams['fcLayers'][-1], device=net.device)
-    # unsupervised_correct = 0
+
     # pseudo_correct = 0
     for batch_idx, (data, target) in enumerate(train_loader):
         if net.cuda:
@@ -267,21 +181,11 @@ def train_Xth(net, jparams, train_loader, epoch, optimizer, supervised_response=
 
         optimizer.zero_grad()
 
-        # # weight normalization
-        # if args.WN:
-        #     # TODO try the WN only at the beginning OR at each epoch
-        #     net.Weight_normal(args)
-
         # forward propagation
         output = net(data.to(torch.float32))
 
-        # create the unsupervised target
-        unsupervised_targets, N_maxindex = net.define_unsupervised_target(output, jparams['nudge_N'], net.device, Xth=Xth)
-        # pseudo_labels, peudo_maxindex = net.define_unsupervised_target(output, jparams['nudge_N'], net.device, Xth=None)
-        # unsupervised_correct += (target == torch.argmax(unsupervised_targets, dim=1)).sum().float()
-        # pseudo_correct += (target == torch.argmax(pseudo_labels, dim=1)).sum().float()
-        # label smoothing
-        unsupervised_targets = net.smoothLabels(unsupervised_targets, 0.2, jparams['nudge_N'])
+        # use the softmax to define the unsupervised_targets
+        unsupervised_targets = F.softmax(output.detach().clone(), dim=1)
 
         if jparams['Dropout']:
             target_activity = jparams['nudge_N'] / (jparams['fcLayers'][-1] * (
@@ -291,31 +195,72 @@ def train_Xth(net, jparams, train_loader, epoch, optimizer, supervised_response=
 
         if jparams['batchSize'] == 1:
             Y_p = (1 - jparams['eta']) * Y_p + jparams['eta'] * unsupervised_targets[0]
-            Xth += net.gamma * (Y_p - target_activity)
+            Xth += jparams['gamma'] * (Y_p - target_activity)
         else:
-            Xth += net.gamma * (torch.mean(unsupervised_targets, axis=0) - target_activity)
-
+            Xth += jparams['gamma'] * (torch.mean(unsupervised_targets, axis=0) - target_activity)
 
         # calculate the loss on the gpu
         loss = criterion(output, unsupervised_targets.to(torch.float32))
         loss.backward()
-        # if jparams['randomHidden']:
-        #  # we keep only the gradients of output layer
-        #     for i in range(len(net.W)-1):
-        #         net.W[i].weight.grad = torch.zeros(net.W[i].weight.size(), device=net.device)
-        #         net.W[i].bias.grad = torch.zeros(net.W[i].bias.size(), device=net.device)
-        # print('the backward loss is:', net.W[0].weight.grad)
 
         optimizer.step()
 
+    return Xth
 
-        # # update the lr after at the end of each epoch
-        # scheduler.step()
-    # if args.unlabeledPercent != 0 and args.unlabeledPercent != 1:
-    #     return Xth, supervised_response
-    # else:
-    # print('unsupervised correct is:', unsupervised_correct)
-    # print('pseudo correct is:', pseudo_correct)
+def train_Xth(net, jparams, train_loader, epoch, optimizer):
+
+    net.train()
+    net.epoch = epoch + 1
+
+    # construct the loss function
+    if jparams['lossFunction'] == 'MSE':
+        criterion = torch.nn.MSELoss()
+    elif jparams['lossFunction'] == 'Cross-entropy':
+        criterion = torch.nn.CrossEntropyLoss()
+    # elif jparams['lossFunction'] == 'Ncross':
+    #     criterion = Ncross_entropy_loss(jparams['nudge_N'])
+
+
+    Xth = torch.zeros(jparams['fcLayers'][-1], device=net.device)
+
+    # Stochastic mode
+    if jparams['batchSize'] == 1:
+        Y_p = torch.zeros(jparams['fcLayers'][-1], device=net.device)
+    # unsupervised_correct = 0
+    # pseudo_correct = 0
+    for batch_idx, (data, _) in enumerate(train_loader):
+        if net.cuda:
+            data = data.to(net.device)
+            # target = target.to(net.device)
+
+        optimizer.zero_grad()
+
+        # forward propagation
+        output = net(data.to(torch.float32))
+        # generate output mask
+        output_mask = drop_output(output, p=jparams['dropProb'][-1]).to(net.device)
+        output = output_mask*output
+
+        # create the unsupervised target
+        unsupervised_targets, N_maxindex = define_unsupervised_target(output, jparams['nudge_N'], net.device, Xth=Xth)
+        # label smoothing
+        if jparams['Smooth']:
+            unsupervised_targets = smoothLabels(unsupervised_targets, 0.3, jparams['nudge_N'])
+        unsupervised_targets = unsupervised_targets * output_mask
+        target_activity = (1-jparams['dropProb'][-1])*jparams['nudge_N']/jparams['fcLayers'][-1]
+
+        if jparams['batchSize'] == 1:
+            Y_p = (1 - jparams['eta']) * Y_p + jparams['eta'] * unsupervised_targets[0]
+            Xth += jparams['gamma'] * (Y_p - target_activity)
+        else:
+            Xth += jparams['gamma'] * (torch.mean(unsupervised_targets, axis=0) - target_activity)
+
+        # calculate the loss on the gpu
+        loss = criterion(output, unsupervised_targets.to(torch.float32))
+        loss.backward()
+
+        optimizer.step()
+
     return Xth
 
 
@@ -329,43 +274,6 @@ def train_bp(net, jparams, train_loader, epoch, optimizer):
         criterion = torch.nn.MSELoss()
     elif jparams['lossFunction'] == 'Cross-entropy':
         criterion = torch.nn.CrossEntropyLoss()
-
-    # # construct the layer-wise parameters
-    # layer_names = []
-    # for idx, (name, param) in enumerate(net.named_parameters()):
-    #     layer_names.append(name)
-    #     #print(f'{idx}: {name}')
-    #
-    # parameters = []
-    # #prev_group_name = layer_names[0].split('.')[0] + '.' + layer_names[0].split('.')[1]
-    #
-    # for idx, name in enumerate(layer_names):
-    #
-    #     # parameter group name
-    #     #cur_group_name = name.split('.')[0] + '.' + name.split('.')[1]
-    #
-    #     # update learning rate
-    #     if idx % 2 == 0:
-    #         lr_indx = int(idx/2)
-    #         lr = jparams['lr'][lr_indx]
-    #
-    #     # display info
-    #     #print(f'{idx}: lr = {lr:.6f}, {name}')
-    #
-    #     # append layer parameters
-    #     parameters += [{'params': [p for n, p in net.named_parameters() if n == name and p.requires_grad],
-    #                     'lr': lr}]
-    #
-    # # construct the optimizer
-    # # TODO changer optimizer to ADAM
-    # if jparams['Optimizer'] == 'SGD':
-    #     optimizer = torch.optim.SGD(parameters, momentum=0.9)
-    # elif jparams['Optimizer'] == 'Adam':
-    #     optimizer = torch.optim.Adam(parameters)
-    # #optimizer = torch.optim.Adam(net.parameters(), lr=lr)
-
-    # construct the scheduler
-    # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
 
     # create the list for training errors and testing errors
     correct_train = torch.zeros(1, device=net.device).squeeze()
@@ -382,30 +290,31 @@ def train_bp(net, jparams, train_loader, epoch, optimizer):
 
         optimizer.zero_grad()
 
-        # # weight normalization
-        # if args.WN:
-        #     # TODO try the WN only at the beginning OR at each epoch
-        #     net.Weight_normal(args)
-
         # forward propagation
         output = net(data.to(torch.float32))
         # label smoothing
-        targets = net.smoothLabels(targets.to(torch.float32), 0.2, 1)
+        if jparams['Smooth']:
+            targets = smoothLabels(targets.to(torch.float32), 0.2, 1)
 
-        loss = criterion(output, targets.to(torch.float32))
-
-        # # <editor-fold desc= "WTA branch">
-        # elif method == 'bp_wta':
-        #     unsupervised_targets, maxindex = net.defi_target_01(output, args.nudge_N)
-        #     loss = criterion(output, unsupervised_targets.to(torch.float32))
-        # # </editor-fold>
+        # transform targets
+        if jparams['fcLayers'][-1] > jparams['n_class']:
+            number_per_class = jparams['fcLayers'][-1]//jparams['n_class']
+            multi_targets = generate_N_targets_label(torch.argmax(targets, dim=1).tolist(), number_per_class, jparams['fcLayers'][-1])
+            if net.cuda:
+                multi_targets = multi_targets.to(net.device)
+            loss = criterion(output, multi_targets.to(torch.float32))
+        else:
+            loss = criterion(output, targets.to(torch.float32))
 
         loss.backward()
         # print('the backward loss is:', net.W[0].weight.grad)
         optimizer.step()
         # count correct times for supervised BP
-        # training errors is calculated during the training process??
-        prediction = torch.argmax(output, dim=1)
+
+        # training error
+        number_per_class = output.size(1) // 10
+        prediction = torch.argmax(output, dim=1)//number_per_class
+
         correct_train += (prediction == torch.argmax(targets, dim=1)).sum().float()
         total_train += targets.size(dim=0)
 
@@ -445,6 +354,9 @@ def test_Xth(net, jparams, test_loader, response, spike_record=0, output_record_
             data = data.to(net.device)
             targets = targets.to(net.device)
 
+        if len(targets.size()) > 1: # for the training error
+            targets = torch.argmax(targets, 1)
+
         output = net(data.to(torch.float32))
         if output_record_path is not None:
             d2 = {'img': output.cpu().tolist(), 'target': targets.cpu().tolist()}
@@ -460,7 +372,6 @@ def test_Xth(net, jparams, test_loader, response, spike_record=0, output_record_
 
         for i in range(jparams['n_class']):
             indice = (response == i).nonzero(as_tuple=True)[0]
-            #TODO need to consider the situation that one class is not presented
             if len(indice) == 0:
                 classvalue[:, i] = -1
             else:
@@ -470,7 +381,6 @@ def test_Xth(net, jparams, test_loader, response, spike_record=0, output_record_
         correct_av_test += (predict_av == targets).sum().float()
 
         '''maximum value'''
-
         # remove the non response neurons
         non_response_indice = (response == -1).nonzero(as_tuple=True)[0]
         output[:, non_response_indice] = -1
@@ -536,8 +446,19 @@ def test_bp(net, test_loader, output_record_path=None):
         total_test += targets.size()[0]
 
         # calculate the accuracy
+        # number_per_class = output.size(1) // 10
+        # prediction = torch.argmax(output, dim=1) // number_per_class
 
-        prediction = torch.argmax(output, dim=1)
+        if output.size(1) == 10:
+            prediction = torch.argmax(output, dim=1)
+        else:
+            # average prediction for multi-neurons per class
+            class_average = torch.zeros((output.size(0), 10), device=net.device)
+            neuron_per_class = output.size(1) // 10
+            for i in range(10):
+                class_average[:, i] = torch.mean(output[:, i:i + neuron_per_class], dim=1)
+            prediction = torch.argmax(class_average, dim=1)
+
         correct_test += (prediction == targets).sum().float()
 
     # save the output values:
@@ -566,7 +487,7 @@ def test_unsupervised_layer(net, class_net, jparams, test_loader):
     for batch_idx, (data, targets) in enumerate(test_loader):
 
         total_batch += 1
-
+        targets = targets.type(torch.LongTensor)
         if net.cuda:
             data = data.to(net.device)
             targets = targets.to(net.device)
@@ -577,9 +498,9 @@ def test_unsupervised_layer(net, class_net, jparams, test_loader):
         # net forward
         x = net(data.to(torch.float32))
         # class_net forward
-        output = class_net.forward(x)
+        output = class_net(x)
         # calculate the loss
-        if jparams['class_activation'] == 'softmax':
+        if jparams['class_activation'] == 'softmax' or jparams['class_activation'] == 'x':
             loss = F.cross_entropy(output, targets)
         else:
             loss = F.mse_loss(output, F.one_hot(targets, num_classes=jparams['n_class']))
@@ -613,7 +534,7 @@ def initDataframe(path, method='bp', dataframe_to_init='results.csv'):
             columns_header = ['Train_Error', 'Min_Train_Error', 'Test_Error', 'Min_Test_Error']
         elif method == 'bp_Xth':
             columns_header = ['One2one_av_Error', 'Min_One2one_av', 'One2one_max_Error', 'Min_One2one_max_Error']
-        elif method == 'semi-supervised':
+        elif method == 'semi_supervised':
             columns_header = ['Unsupervised_Test_Error', 'Min_Unsupervised_Test_Error', 'Supervised_Test_Error', 'Min_Supervised_Test_Error']
         elif method == 'classification_layer':
             columns_header = ['Train_Class_Error', 'Min_Train_Class_Error', 'Final_Test_Error', 'Min_Final_Test_Error',
@@ -644,7 +565,6 @@ def initXthframe(path, dataframe_to_init='Xth_norm.csv'):
         dataframe = pd.DataFrame({}, columns=columns_header)
         dataframe.to_csv(path + prefix + 'Xth_norm.csv')
     return dataframe
-
 
 
 def updateDataframe(BASE_PATH, dataframe, error1, error2, filename='results.csv', loss=None):
